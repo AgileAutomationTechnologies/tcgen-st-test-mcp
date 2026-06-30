@@ -1,0 +1,100 @@
+# tcgen-st-test-mcp
+
+Offline semantic validation for TcGen Structured Text review bundles.
+
+This MCP server accepts inline TcGen review-ST sources, normalizes the supported
+subset into STruC++-compatible ST, optionally generates STruC++ tests from a JSON
+test spec, and runs them through the `strucpp` CLI in a temporary workspace.
+
+Passing results mean only:
+
+> Offline semantic test passed for the normalized STruC++ model. Final TwinCAT
+> compilation or target validation may still be required for vendor libraries,
+> task behavior, I/O, ADS, motion, lifecycle methods, and runtime-specific
+> behavior.
+
+## Tools
+
+- `tcgen_st_backend_check`
+- `tcgen_st_normalize`
+- `tcgen_st_test_generate`
+- `tcgen_st_test_run`
+
+## CLI
+
+```bash
+tcgen-st-test backend-check
+tcgen-st-test normalize request.json
+tcgen-st-test generate request.json
+tcgen-st-test run request.json
+```
+
+## Local Development
+
+Use Node.js 22 or later.
+
+```powershell
+npm ci
+npm run build
+```
+
+For local development against a sibling STruC++ checkout:
+
+```powershell
+$env:STRUCPP_PATH = "C:\Users\fboid\source\python\STruCpp"
+$env:STRUCPP_GPP_PATH = "C:\msys64\ucrt64\bin\g++.exe"
+```
+
+`STRUCPP_PATH` may point to a `strucpp` executable, `dist/node/cli.js`, or the
+STruC++ repository root. `STRUCPP_GPP_PATH` is optional for backend checks, but
+`tcgen_st_test_run` needs a working `g++` for STruC++ `--test` execution.
+
+The v0.1 Windows validation target is STruC++ `0.5.12` plus local Windows fixes
+verified against commit `81d5aee48c3d25c7c0298124a87c5f42f85383be` until those
+fixes are available upstream.
+
+## Verification
+
+```powershell
+npm run verify
+npm run verify:native
+npm run fixtures
+npm run smoke:mcp
+npm pack --dry-run
+```
+
+Native verification expects:
+
+```powershell
+$env:STRUCPP_PATH = "C:\Users\fboid\source\python\STruCpp"
+$env:STRUCPP_GPP_PATH = "C:\msys64\ucrt64\bin\g++.exe"
+```
+
+Reference STruC++ checks:
+
+```powershell
+cd C:\Users\fboid\source\python\STruCpp
+npm run build
+npm run typecheck
+node dist\node\cli.js --version
+node dist\node\cli.js tests\st-validation\function_blocks\fb_accumulator.st --gpp C:\msys64\ucrt64\bin\g++.exe --test tests\st-validation\function_blocks\test_fb_accumulator.st
+node dist\node\cli.js tests\st-validation\function_blocks\basic_fb.st --no-default-libs --gpp C:\msys64\ucrt64\bin\g++.exe --test tests\st-validation\function_blocks\test_basic_fb.st
+```
+
+## Workspace Retention
+
+Temporary workspaces are deleted by default. `keepWorkspace` only returns a
+workspace path when both are true:
+
+- the request sets `options.keepWorkspace = true`;
+- the local environment sets `TCGEN_ST_ALLOW_KEEP_WORKSPACE=true`.
+
+Without that environment flag, `keepWorkspace` is ignored and a non-blocking
+`SANDBOX_KEEP_WORKSPACE_DISABLED` diagnostic is returned.
+
+## Known STruC++ Limitation
+
+The upstream `basic_fb` sample declares `Toggle`, while bundled OSCAT libraries
+also define `TOGGLE`. Run that sample with `--no-default-libs`; use
+`fb_accumulator` as the default-library native smoke until library shadowing is
+handled upstream.

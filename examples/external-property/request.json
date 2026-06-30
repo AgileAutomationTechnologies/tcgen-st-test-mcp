@@ -1,0 +1,30 @@
+{
+  "profile": "tcgen-strucpp-v1",
+  "sources": [
+    {
+      "path": "limited.st",
+      "content": "FUNCTION_BLOCK FB_Limited\nVAR\n    _position : DINT;\nEND_VAR\nEND_FUNCTION_BLOCK\n\nPROPERTY PUBLIC FB_Limited.Position : DINT\nGET\n    Position := _position;\nEND_GET\nSET\n    IF Position > 100 THEN\n        _position := 100;\n    ELSE\n        _position := Position;\n    END_IF;\nEND_SET\nEND_PROPERTY\n"
+    }
+  ],
+  "testSpec": {
+    "schemaVersion": 1,
+    "name": "external-property",
+    "target": {
+      "pouName": "FB_Limited",
+      "kind": "FUNCTION_BLOCK",
+      "instanceName": "dut"
+    },
+    "tests": [
+      {
+        "name": "property setter clamps value",
+        "steps": [
+          { "kind": "set", "path": "$target.Position", "value": 120 },
+          { "kind": "expectEquals", "path": "$target.Position", "value": 100 }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "includeArtifacts": true
+  }
+}

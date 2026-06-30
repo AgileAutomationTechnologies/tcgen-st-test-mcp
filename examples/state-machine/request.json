@@ -1,0 +1,31 @@
+{
+  "profile": "tcgen-strucpp-v1",
+  "sources": [
+    {
+      "path": "state_machine.st",
+      "content": "FUNCTION_BLOCK FB_StateMachine\nVAR_OUTPUT\n    nState : DINT;\n    xDone : BOOL;\nEND_VAR\nCASE nState OF\n    0:\n        nState := 1;\n    1:\n        nState := 2;\n    ELSE\n        xDone := TRUE;\nEND_CASE;\nEND_FUNCTION_BLOCK\n"
+    }
+  ],
+  "testSpec": {
+    "schemaVersion": 1,
+    "name": "state-machine",
+    "target": {
+      "pouName": "FB_StateMachine",
+      "kind": "FUNCTION_BLOCK",
+      "instanceName": "dut"
+    },
+    "tests": [
+      {
+        "name": "state advances over scans",
+        "steps": [
+          { "kind": "call", "cycles": 3 },
+          { "kind": "expectEquals", "path": "$target.nState", "value": 2 },
+          { "kind": "expectTrue", "path": "$target.xDone" }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "includeArtifacts": true
+  }
+}

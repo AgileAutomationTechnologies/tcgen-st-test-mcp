@@ -1,0 +1,33 @@
+{
+  "profile": "tcgen-strucpp-v1",
+  "sources": [
+    {
+      "path": "timer.st",
+      "content": "FUNCTION_BLOCK FB_TimerCheck\nVAR_INPUT\n    xEnable : BOOL;\nEND_VAR\nVAR_OUTPUT\n    xDone : BOOL;\nEND_VAR\nVAR\n    tonDelay : TON;\nEND_VAR\ntonDelay(IN := xEnable, PT := T#100ms);\nxDone := tonDelay.Q;\nEND_FUNCTION_BLOCK\n"
+    }
+  ],
+  "testSpec": {
+    "schemaVersion": 1,
+    "name": "timer",
+    "target": {
+      "pouName": "FB_TimerCheck",
+      "kind": "FUNCTION_BLOCK",
+      "instanceName": "dut"
+    },
+    "tests": [
+      {
+        "name": "TON completes after preset",
+        "steps": [
+          { "kind": "call", "arguments": { "xEnable": true } },
+          { "kind": "expectFalse", "path": "$target.xDone" },
+          { "kind": "advanceTime", "nanoseconds": 100000000 },
+          { "kind": "call", "arguments": { "xEnable": true } },
+          { "kind": "expectTrue", "path": "$target.xDone" }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "includeArtifacts": true
+  }
+}

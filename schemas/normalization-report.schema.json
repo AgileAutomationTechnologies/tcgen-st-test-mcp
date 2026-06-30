@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tcgen.dev/schemas/normalization-report.schema.json",
+  "title": "NormalizationReport",
+  "type": "object",
+  "required": ["schemaVersion", "parseStatus", "compatibilityStatus", "normalizedFiles", "normalization", "diagnostics", "hashes"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "parseStatus": { "enum": ["ok", "error"] },
+    "compatibilityStatus": { "enum": ["exact", "rewritten", "partial", "blocked"] },
+    "normalizedFiles": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/normalizedFile" }
+    },
+    "normalization": { "$ref": "#/$defs/normalizationSummary" },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    },
+    "hashes": {
+      "type": "object",
+      "required": ["request"],
+      "additionalProperties": false,
+      "properties": {
+        "request": { "type": "string" },
+        "normalizedSource": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "sourceSpan": {
+      "type": "object",
+      "required": ["path", "startLine", "endLine"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "startLine": { "type": "integer", "minimum": 1 },
+        "endLine": { "type": "integer", "minimum": 1 },
+        "startColumn": { "type": "integer", "minimum": 1 },
+        "endColumn": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": ["severity", "blocking", "code", "message"],
+      "additionalProperties": true,
+      "properties": {
+        "severity": { "enum": ["info", "warning", "error"] },
+        "blocking": { "type": "boolean" },
+        "code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" },
+        "original": { "$ref": "#/$defs/sourceSpan" },
+        "generated": { "$ref": "#/$defs/sourceSpan" },
+        "object": { "type": "string" },
+        "ruleId": { "type": "string" },
+        "suggestion": { "type": "string" }
+      }
+    },
+    "rewriteRecord": {
+      "type": "object",
+      "required": ["ruleId", "originalText", "generatedText", "sourceSpan", "generatedSpan"],
+      "additionalProperties": false,
+      "properties": {
+        "ruleId": { "type": "string" },
+        "originalText": { "type": "string" },
+        "generatedText": { "type": "string" },
+        "sourceSpan": { "$ref": "#/$defs/sourceSpan" },
+        "generatedSpan": { "$ref": "#/$defs/sourceSpan" }
+      }
+    },
+    "normalizedFile": {
+      "type": "object",
+      "required": ["path", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "content": { "type": "string" }
+      }
+    },
+    "normalizationSummary": {
+      "type": "object",
+      "required": ["profile", "status", "includedObjects", "omittedObjects", "blockedObjects", "symbolMap", "rewrites", "diagnostics"],
+      "additionalProperties": false,
+      "properties": {
+        "profile": { "const": "tcgen-strucpp-v1" },
+        "status": { "enum": ["exact", "rewritten", "partial", "blocked"] },
+        "includedObjects": { "type": "array", "items": { "type": "string" } },
+        "omittedObjects": { "type": "array", "items": { "type": "string" } },
+        "blockedObjects": { "type": "array", "items": { "type": "string" } },
+        "symbolMap": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "rewrites": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/rewriteRecord" }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/diagnostic" }
+        }
+      }
+    }
+  }
+}

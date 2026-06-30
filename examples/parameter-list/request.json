@@ -1,0 +1,30 @@
+{
+  "profile": "tcgen-strucpp-v1",
+  "sources": [
+    {
+      "path": "parameters.st",
+      "content": "PARAMETER_LIST PL_Machine\nVAR_GLOBAL CONSTANT\n    cMaxAxes : DINT := 4;\nEND_VAR\nEND_PARAMETER_LIST\n\nFUNCTION_BLOCK FB_ParameterUser\nVAR_OUTPUT\n    nMax : DINT;\nEND_VAR\nnMax := PL_Machine.cMaxAxes;\nEND_FUNCTION_BLOCK\n"
+    }
+  ],
+  "testSpec": {
+    "schemaVersion": 1,
+    "name": "parameter-list",
+    "target": {
+      "pouName": "FB_ParameterUser",
+      "kind": "FUNCTION_BLOCK",
+      "instanceName": "dut"
+    },
+    "tests": [
+      {
+        "name": "parameter constant is flattened",
+        "steps": [
+          { "kind": "call" },
+          { "kind": "expectEquals", "path": "$target.nMax", "value": 4 }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "includeArtifacts": true
+  }
+}

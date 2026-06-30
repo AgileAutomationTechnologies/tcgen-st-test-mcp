@@ -1,0 +1,31 @@
+{
+  "profile": "tcgen-strucpp-v1",
+  "sources": [
+    {
+      "path": "axis.st",
+      "content": "FUNCTION_BLOCK FB_Axis\nVAR_OUTPUT\n    xStarted : BOOL;\nEND_VAR\nEND_FUNCTION_BLOCK\n\nMETHOD PUBLIC FB_Axis.Start : BOOL\nxStarted := TRUE;\nStart := TRUE;\nEND_METHOD\n"
+    }
+  ],
+  "testSpec": {
+    "schemaVersion": 1,
+    "name": "external-method",
+    "target": {
+      "pouName": "FB_Axis",
+      "kind": "FUNCTION_BLOCK",
+      "instanceName": "dut"
+    },
+    "tests": [
+      {
+        "name": "external method is injected",
+        "steps": [
+          { "kind": "expectFalse", "path": "$target.xStarted" },
+          { "kind": "call", "target": "dut.Start" },
+          { "kind": "expectTrue", "path": "$target.xStarted" }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "includeArtifacts": true
+  }
+}

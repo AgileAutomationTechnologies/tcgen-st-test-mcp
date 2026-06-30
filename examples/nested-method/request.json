@@ -1,0 +1,31 @@
+{
+  "profile": "tcgen-strucpp-v1",
+  "sources": [
+    {
+      "path": "motor.st",
+      "content": "FUNCTION_BLOCK FB_Motor\nVAR\n    _running : BOOL;\nEND_VAR\nVAR_OUTPUT\n    xRunning : BOOL;\nEND_VAR\n\nMETHOD PUBLIC Start\n_running := TRUE;\nEND_METHOD\n\nxRunning := _running;\nEND_FUNCTION_BLOCK\n"
+    }
+  ],
+  "testSpec": {
+    "schemaVersion": 1,
+    "name": "nested-method",
+    "target": {
+      "pouName": "FB_Motor",
+      "kind": "FUNCTION_BLOCK",
+      "instanceName": "dut"
+    },
+    "tests": [
+      {
+        "name": "nested method remains callable",
+        "steps": [
+          { "kind": "call", "target": "dut.Start" },
+          { "kind": "call" },
+          { "kind": "expectTrue", "path": "$target.xRunning" }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "includeArtifacts": true
+  }
+}

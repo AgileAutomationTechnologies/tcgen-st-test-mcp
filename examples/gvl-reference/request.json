@@ -1,0 +1,31 @@
+{
+  "profile": "tcgen-strucpp-v1",
+  "sources": [
+    {
+      "path": "globals.st",
+      "content": "GVL GVL_Config\nVAR_GLOBAL CONSTANT\n    xEnable : BOOL := TRUE;\n    nLimit : DINT := 7;\nEND_VAR\nEND_GVL\n\nFUNCTION_BLOCK FB_GlobalUser\nVAR_OUTPUT\n    xOut : BOOL;\n    nOut : DINT;\nEND_VAR\nxOut := GVL_Config.xEnable;\nnOut := GVL_Config.nLimit;\nEND_FUNCTION_BLOCK\n"
+    }
+  ],
+  "testSpec": {
+    "schemaVersion": 1,
+    "name": "gvl-reference",
+    "target": {
+      "pouName": "FB_GlobalUser",
+      "kind": "FUNCTION_BLOCK",
+      "instanceName": "dut"
+    },
+    "tests": [
+      {
+        "name": "qualified GVL references are flattened",
+        "steps": [
+          { "kind": "call" },
+          { "kind": "expectTrue", "path": "$target.xOut" },
+          { "kind": "expectEquals", "path": "$target.nOut", "value": 7 }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "includeArtifacts": true
+  }
+}

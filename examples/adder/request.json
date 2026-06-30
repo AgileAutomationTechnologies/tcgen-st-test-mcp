@@ -1,0 +1,30 @@
+{
+  "profile": "tcgen-strucpp-v1",
+  "sources": [
+    {
+      "path": "adder.st",
+      "content": "FUNCTION_BLOCK FB_Adder\nVAR_INPUT\n    A : DINT;\n    B : DINT;\nEND_VAR\nVAR_OUTPUT\n    Sum : DINT;\nEND_VAR\nSum := A + B;\nEND_FUNCTION_BLOCK\n"
+    }
+  ],
+  "testSpec": {
+    "schemaVersion": 1,
+    "name": "adder",
+    "target": {
+      "pouName": "FB_Adder",
+      "kind": "FUNCTION_BLOCK",
+      "instanceName": "dut"
+    },
+    "tests": [
+      {
+        "name": "adds two integers",
+        "steps": [
+          { "kind": "call", "arguments": { "A": 2, "B": 3 } },
+          { "kind": "expectEquals", "path": "$target.Sum", "value": 5 }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "includeArtifacts": true
+  }
+}

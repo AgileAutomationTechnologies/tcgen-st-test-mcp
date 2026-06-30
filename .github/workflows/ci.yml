@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - development
+
+jobs:
+  node:
+    name: node-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
+
+  native-windows:
+    name: native-windows-strucpp
+    runs-on: windows-latest
+    env:
+      STRUCPP_REF: development
+      STRUCPP_PATH: ${{ github.workspace }}\STruCpp
+      STRUCPP_GPP_PATH: C:\msys64\ucrt64\bin\g++.exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: tcgen-st-test-mcp
+      - uses: actions/checkout@v4
+        with:
+          repository: Autonomy-Logic/STruCpp
+          ref: ${{ env.STRUCPP_REF }}
+          path: STruCpp
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            tcgen-st-test-mcp/package-lock.json
+            STruCpp/package-lock.json
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: mingw-w64-ucrt-x86_64-gcc
+      - name: Build STruC++
+        working-directory: STruCpp
+        run: |
+          npm ci
+          npm run build
+          npm run typecheck
+          node dist\node\cli.js --version
+      - name: Run STruC++ native samples
+        working-directory: STruCpp
+        run: |
+          node dist\node\cli.js tests\st-validation\function_blocks\fb_accumulator.st --gpp $env:STRUCPP_GPP_PATH --test tests\st-validation\function_blocks\test_fb_accumulator.st
+          node dist\node\cli.js tests\st-validation\function_blocks\basic_fb.st --no-default-libs --gpp $env:STRUCPP_GPP_PATH --test tests\st-validation\function_blocks\test_basic_fb.st
+      - name: Run MCP native verification
+        working-directory: tcgen-st-test-mcp
+        run: |
+          npm ci
+          npm run verify:native
+          npm pack --dry-run
