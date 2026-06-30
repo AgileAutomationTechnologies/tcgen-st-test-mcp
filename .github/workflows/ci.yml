@@ -30,7 +30,6 @@ jobs:
     env:
       STRUCPP_REF: development
       STRUCPP_PATH: ${{ github.workspace }}\STruCpp
-      STRUCPP_GPP_PATH: C:\msys64\ucrt64\bin\g++.exe
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,10 +47,19 @@ jobs:
             tcgen-st-test-mcp/package-lock.json
             STruCpp/package-lock.json
       - uses: msys2/setup-msys2@v2
+        id: msys2
         with:
           msystem: UCRT64
           update: true
           install: mingw-w64-ucrt-x86_64-gcc
+      - name: Resolve MSYS2 GCC path
+        run: |
+          $gpp = Join-Path "${{ steps.msys2.outputs.msys2-location }}" "ucrt64\bin\g++.exe"
+          if (!(Test-Path -LiteralPath $gpp -PathType Leaf)) {
+            throw "Expected MSYS2 UCRT64 g++ at '$gpp', but it was not found."
+          }
+          & $gpp --version
+          "STRUCPP_GPP_PATH=$gpp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build STruC++
         working-directory: STruCpp
         run: |
