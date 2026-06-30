@@ -3,8 +3,9 @@
 Offline semantic validation for TcGen Structured Text review bundles.
 
 This MCP server accepts inline TcGen review-ST sources, normalizes the supported
-subset into STruC++-compatible ST, optionally generates STruC++ tests from a JSON
-test spec, and runs them through the `strucpp` CLI in a temporary workspace.
+subset into STruC++-compatible ST, builds either JSON-spec tests or TcGen
+framework-style tests, and runs them through the `strucpp` CLI in a temporary
+workspace.
 
 Passing results mean only:
 
@@ -28,6 +29,36 @@ tcgen-st-test normalize request.json
 tcgen-st-test generate request.json
 tcgen-st-test run request.json
 ```
+
+## Test Modes
+
+`tcgen_st_test_generate` and `tcgen_st_test_run` accept exactly one test
+authority:
+
+- `testSpec`: the original JSON step format, converted into STruC++ `TEST`
+  blocks.
+- `frameworkTest`: TcGen/TwinCAT-style ST tests where the request sources include
+  the CUT plus concrete `FB_Test_* EXTENDS FB_TestCaseBase` blocks.
+
+Framework mode uses:
+
+```json
+{
+  "frameworkTest": {
+    "mode": "tcgen-test-framework",
+    "testFunctionBlocks": ["FB_Test_LimitCounter"],
+    "maxScans": 200
+  }
+}
+```
+
+In framework mode the MCP normalizes the CUT and agent-authored test FBs, omits
+uploaded framework infrastructure such as `FB_TestRunner`, `I_TestCase`,
+`FB_TestCaseBase`, `GVL_TestResults`, and `PROGRAM MAIN`, injects a compact
+STruC++-compatible framework shim, then runs generated wrapper `TEST` blocks
+against the concrete `FB_Test_*` instances. A failing framework assertion is
+returned as `verdict: "failed"` with the STruC++ assertion detail in
+`tests[].message`.
 
 ## Local Development
 

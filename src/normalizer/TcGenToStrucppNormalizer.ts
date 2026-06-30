@@ -19,8 +19,20 @@ export interface NormalizeResult {
   hashes: { request: string; normalizedSource?: string };
 }
 
+export interface OmitObjectDecision {
+  code: string;
+  message: string;
+  severity?: Diagnostic["severity"];
+  ruleId?: string;
+  affectsStatus?: boolean;
+}
+
+export interface NormalizeRuntimeOptions {
+  omitObject?: (object: TcGenObject) => OmitObjectDecision | undefined;
+}
+
 export class TcGenToStrucppNormalizer {
-  normalize(request: NormalizeRequest): NormalizeResult {
+  normalize(request: NormalizeRequest, runtimeOptions: NormalizeRuntimeOptions = {}): NormalizeResult {
     const strict = request.options?.strict !== false;
     const parser = new TcGenBundleParser();
     const document = parser.parseSources(request.sources ?? [], { autoClose: request.options?.autoClose === true });
@@ -32,19 +44,22 @@ export class TcGenToStrucppNormalizer {
     }
 
     const selected = selectObjects(document.objects, request.scope, diagnostics, strict);
-    analyzeCompatibility(selected, diagnostics, strict);
-    const symbolMap = buildSymbolMap(selected, diagnostics);
-    const emitted = emitNormalized(selected, symbolMap, diagnostics, rewrites, strict);
+    const omittedByRuntime = applyRuntimeOmissions(selected, diagnostics, runtimeOptions);
+    const selectedForEmission = selected.filter(object => !omittedByRuntime.objects.has(object.qualifiedName.toLowerCase()));
+    analyzeCompatibility(selectedForEmission, diagnostics, strict);
+    const symbolMap = buildSymbolMap(selectedForEmission, diagnostics);
+    const emitted = emitNormalized(selectedForEmission, symbolMap, diagnostics, rewrites, strict);
     const normalizedContent = emitted.files.map(file => file.content).join("\n\n");
-    const blockedObjects = selected
+    const omittedObjects = [...emitted.omitted, ...omittedByRuntime.names];
+    const blockedObjects = selectedForEmission
       .filter(object => diagnostics.some(item => item.blocking && item.object === object.qualifiedName))
       .map(object => object.qualifiedName);
     const hasBlocking = diagnostics.some(item => item.blocking);
     const status = hasBlocking
       ? "blocked"
-      : rewrites.length > 0 || diagnostics.some(item => item.code.startsWith("TCNORM_"))
+      : rewrites.length > 0 || diagnostics.some(item => item.code.startsWith("TCNORM_") || item.code.startsWith("TCFRAMEWORK_"))
         ? "rewritten"
-        : emitted.omitted.length > 0
+        : emitted.omitted.length > 0 || omittedByRuntime.affectsPartialStatus
           ? "partial"
           : "exact";
 
@@ -59,7 +74,7 @@ export class TcGenToStrucppNormalizer {
         profile: "tcgen-strucpp-v1",
         status,
         includedObjects: selected.map(object => object.qualifiedName),
-        omittedObjects: emitted.omitted,
+        omittedObjects,
         blockedObjects,
         symbolMap: Object.fromEntries(symbolMap),
         rewrites,
@@ -69,6 +84,35 @@ export class TcGenToStrucppNormalizer {
       hashes
     };
   }
+}
+
+function applyRuntimeOmissions(
+  selected: TcGenObject[],
+  diagnostics: Diagnostic[],
+  runtimeOptions: NormalizeRuntimeOptions
+): { objects: Set<string>; names: string[]; affectsPartialStatus: boolean } {
+  const omitted = new Set<string>();
+  const names: string[] = [];
+  let affectsPartialStatus = false;
+  if (!runtimeOptions.omitObject) return { objects: omitted, names, affectsPartialStatus };
+
+  for (const object of selected) {
+    const decision = runtimeOptions.omitObject(object);
+    if (!decision) continue;
+    omitted.add(object.qualifiedName.toLowerCase());
+    names.push(object.qualifiedName);
+    affectsPartialStatus = affectsPartialStatus || decision.affectsStatus !== false;
+    diagnostics.push(
+      diagnostic(decision.severity ?? "info", decision.code, decision.message, {
+        blocking: false,
+        object: object.qualifiedName,
+        original: object.sourceSpan,
+        ruleId: decision.ruleId
+      })
+    );
+  }
+
+  return { objects: omitted, names, affectsPartialStatus };
 }
 
 function validateRequestSources(sources: Array<{ path: string; content: string }>): Diagnostic[] {

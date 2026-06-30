@@ -208,6 +208,7 @@ export const semanticReportSchema = {
           type: "array",
           items: { $ref: "#/$defs/normalizedFile" }
         },
+        testFile: { $ref: "#/$defs/normalizedFile" },
         generatedTestFile: { $ref: "#/$defs/normalizedFile" },
         stdout: { type: "string" },
         stderr: { type: "string" },

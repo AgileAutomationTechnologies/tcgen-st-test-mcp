@@ -333,13 +333,29 @@ function classify(exitCode: number | null, stdout: string, stderr: string, tests
 
 function parseTests(text: string): BackendRunResult["tests"] {
   const tests: BackendRunResult["tests"] = [];
+  const pendingFailureDetails: string[] = [];
   for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (/^ASSERT_[A-Z_]+\s+failed:/i.test(trimmed) || (pendingFailureDetails.length > 0 && /^at\s+.+:\d+/i.test(trimmed))) {
+      pendingFailureDetails.push(trimmed);
+      continue;
+    }
     const pass = /^\s*(?:PASS:|\[PASS\])\s*(.+?)\s*$/i.exec(line);
-    if (pass) tests.push({ name: pass[1], status: "passed" });
+    if (pass) {
+      pendingFailureDetails.length = 0;
+      tests.push({ name: pass[1], status: "passed" });
+    }
     const fail = /^\s*(?:FAIL:|\[FAIL\])\s*(.+?)\s*$/i.exec(line);
-    if (fail) tests.push({ name: fail[1], status: "failed", message: line.trim() });
+    if (fail) {
+      const message = pendingFailureDetails.length > 0 ? pendingFailureDetails.join("\n") : trimmed;
+      pendingFailureDetails.length = 0;
+      tests.push({ name: fail[1], status: "failed", message });
+    }
     const skipped = /^\s*(?:SKIP:|\[SKIP\]|\[SKIPPED\])\s*(.+?)\s*$/i.exec(line);
-    if (skipped) tests.push({ name: skipped[1], status: "skipped" });
+    if (skipped) {
+      pendingFailureDetails.length = 0;
+      tests.push({ name: skipped[1], status: "skipped" });
+    }
   }
   return tests;
 }

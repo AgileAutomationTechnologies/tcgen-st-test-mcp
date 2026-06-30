@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SemanticTestReport } from "../src/domain/models.js";
 import { toolHandlers } from "../src/mcp/tools.js";
-import { loadRequest, localStrucppRepo, withEnv } from "./helpers.js";
+import { loadRequest, loadTestFixture, localStrucppRepo, withEnv } from "./helpers.js";
 
 describe("failure paths", () => {
   it("returns backend_error when STruC++ is missing", async () => {
@@ -92,6 +92,18 @@ describe("failure paths", () => {
       expect(report.diagnostics.map(item => item.code)).toContain("SANDBOX_KEEP_WORKSPACE_DISABLED");
     });
   }, 30_000);
+
+  it("returns failed when a framework test catches a broken CUT", async () => {
+    const repo = localStrucppRepo();
+    if (!repo) return;
+    const request = loadTestFixture("framework-limit-counter-broken.json");
+    await withEnv({ STRUCPP_PATH: repo }, async () => {
+      const report = (await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>)) as SemanticTestReport;
+      expect(report.verdict).toBe("failed");
+      expect(report.summary.failed).toBe(1);
+      expect(report.tests[0]?.message ?? "").toContain("counter should clamp at limit");
+    });
+  }, 60_000);
 });
 
 async function rmRetry(path: string): Promise<void> {

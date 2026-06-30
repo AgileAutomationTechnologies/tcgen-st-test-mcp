@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { StrucppBackend } from "../backends/StrucppBackend.js";
-import { NormalizeRequest, SemanticTestReport, TcGenTestSpec, diagnostic } from "../domain/models.js";
+import { NormalizeRequest, SemanticTestReport, diagnostic } from "../domain/models.js";
 import { TcGenToStrucppNormalizer } from "../normalizer/TcGenToStrucppNormalizer.js";
-import { StrucppTestGenerator } from "../testspec/StrucppTestGenerator.js";
+import { normalizerOptionsForTestRequest, resolveTestFile, TestRequest } from "../testspec/TestFileResolver.js";
 import { WorkspaceManager } from "../workspace/WorkspaceManager.js";
 import { validateNormalizationReport, validateSemanticReport } from "../schemas/validators.js";
 
@@ -40,32 +40,30 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async tcgen_st_test_generate(args) {
-    const request = args as unknown as NormalizeRequest & { testSpec?: TcGenTestSpec };
-    const normalized = new TcGenToStrucppNormalizer().normalize(request);
-    const generated = request.testSpec
-      ? new StrucppTestGenerator().generate(request.testSpec)
-      : { path: "semantic_tests.st", content: "", diagnostics: [diagnostic("error", "TCTEST_SPEC_REQUIRED", "testSpec is required.")], hash: "" };
-    const hashes: SemanticTestReport["hashes"] = { ...normalized.hashes };
+    const request = args as unknown as TestRequest;
+    const normalized = new TcGenToStrucppNormalizer().normalize(request, normalizerOptionsForTestRequest(request));
+    const generated = resolveTestFile(request, normalized);
+    const normalizedForReport = withRuntimeSourceFiles(normalized, generated.sourceFiles);
+    const hashes: SemanticTestReport["hashes"] = { ...normalizedForReport.hashes };
     if (generated.hash) hashes.testSource = generated.hash;
     return {
       schemaVersion: 1,
-      normalization: normalized.normalization,
-      normalizedFiles: request.options?.includeNormalizedSources === false ? [] : normalized.normalizedFiles,
+      normalization: normalizedForReport.normalization,
+      normalizedFiles: request.options?.includeNormalizedSources === false ? [] : normalizedForReport.normalizedFiles,
+      testFile: { path: generated.path, content: generated.content },
       generatedTestFile: { path: generated.path, content: generated.content },
-      diagnostics: [...normalized.normalization.diagnostics, ...generated.diagnostics],
+      diagnostics: [...normalizedForReport.normalization.diagnostics, ...generated.diagnostics],
       hashes
     };
   },
 
   async tcgen_st_test_run(args) {
-    const request = args as unknown as NormalizeRequest & {
-      testSpec?: TcGenTestSpec;
+    const request = args as unknown as TestRequest & {
       options?: NormalizeRequest["options"] & { timeoutMs?: number; keepWorkspace?: boolean; includeArtifacts?: boolean };
     };
-    const normalized = new TcGenToStrucppNormalizer().normalize(request);
-    const testFile = request.testSpec
-      ? new StrucppTestGenerator().generate(request.testSpec)
-      : { path: "semantic_tests.st", content: "", diagnostics: [diagnostic("error", "TCTEST_SPEC_REQUIRED", "testSpec is required.")], hash: "" };
+    const normalized = new TcGenToStrucppNormalizer().normalize(request, normalizerOptionsForTestRequest(request));
+    const testFile = resolveTestFile(request, normalized);
+    const normalizedForRun = withRuntimeSourceFiles(normalized, testFile.sourceFiles);
     const keepWorkspace = request.options?.keepWorkspace === true && process.env.TCGEN_ST_ALLOW_KEEP_WORKSPACE === "true";
     const keepWorkspaceDiagnostics =
       request.options?.keepWorkspace === true && !keepWorkspace
@@ -75,11 +73,11 @@ export const toolHandlers: Record<string, ToolHandler> = {
             })
           ]
         : [];
-    const preflightDiagnostics = [...normalized.normalization.diagnostics, ...testFile.diagnostics, ...keepWorkspaceDiagnostics];
+    const preflightDiagnostics = [...normalizedForRun.normalization.diagnostics, ...testFile.diagnostics, ...keepWorkspaceDiagnostics];
     if (preflightDiagnostics.some(item => item.blocking)) {
       return buildReport({
-        verdict: normalized.normalization.status === "blocked" ? "unsupported" : "backend_error",
-        normalized,
+        verdict: normalizedForRun.normalization.status === "blocked" ? "unsupported" : "backend_error",
+        normalized: normalizedForRun,
         testFile,
         diagnostics: preflightDiagnostics
       });
@@ -89,13 +87,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const workspace = await workspaceManager.create();
     let backendResult;
     try {
-      const sourcePaths = await workspaceManager.writeFiles(workspace, normalized.normalizedFiles);
+      const sourcePaths = await workspaceManager.writeFiles(workspace, normalizedForRun.normalizedFiles);
       const [testPath] = await workspaceManager.writeFiles(workspace, [{ path: testFile.path, content: testFile.content }]);
       backendResult = await new StrucppBackend().run(sourcePaths, testPath, { timeoutMs: request.options?.timeoutMs });
     } catch (error) {
       return buildReport({
         verdict: "backend_error",
-        normalized,
+        normalized: normalizedForRun,
         testFile,
         diagnostics: [
           ...preflightDiagnostics,
@@ -110,7 +108,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
     return buildReport({
       verdict: backendResult.status,
-      normalized,
+      normalized: normalizedForRun,
       testFile,
       diagnostics: [...preflightDiagnostics, ...backendResult.diagnostics],
       backendResult,
@@ -183,6 +181,7 @@ function buildReport(input: {
   if (input.includeArtifacts) {
     const artifacts: NonNullable<SemanticTestReport["artifacts"]> = {
       normalizedFiles: input.normalized.normalizedFiles,
+      testFile: { path: input.testFile.path, content: input.testFile.content },
       generatedTestFile: { path: input.testFile.path, content: input.testFile.content }
     };
     if (input.backendResult?.stdout !== undefined) artifacts.stdout = input.backendResult.stdout;
@@ -266,13 +265,40 @@ function normalizeSchema(requireTestSpec: boolean): Record<string, unknown> {
     }
   };
   if (requireTestSpec) properties.testSpec = { type: "object" };
+  if (requireTestSpec) {
+    properties.frameworkTest = {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["tcgen-test-framework"] },
+        testFunctionBlocks: { type: "array", items: { type: "string" } },
+        maxScans: { type: "number" }
+      }
+    };
+  }
   return {
     type: "object",
-    required: requireTestSpec ? ["sources", "testSpec"] : ["sources"],
+    required: ["sources"],
     properties
   };
 }
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+function withRuntimeSourceFiles(
+  normalized: ReturnType<TcGenToStrucppNormalizer["normalize"]>,
+  sourceFiles: Array<{ path: string; content: string }>
+): ReturnType<TcGenToStrucppNormalizer["normalize"]> {
+  if (sourceFiles.length === 0) return normalized;
+  const normalizedFiles = [...sourceFiles, ...normalized.normalizedFiles];
+  const normalizedSource = normalizedFiles.map(file => file.content).join("\n\n");
+  return {
+    ...normalized,
+    normalizedFiles,
+    hashes: {
+      ...normalized.hashes,
+      normalizedSource: normalizedSource ? sha256(normalizedSource) : normalized.hashes.normalizedSource
+    }
+  };
 }

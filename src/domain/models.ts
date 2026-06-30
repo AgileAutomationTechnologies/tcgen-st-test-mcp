@@ -118,6 +118,12 @@ export interface TcGenTestSpec {
   tests: Array<{ name: string; steps: TestStep[] }>;
 }
 
+export interface FrameworkTestConfig {
+  mode: "tcgen-test-framework";
+  testFunctionBlocks?: string[];
+  maxScans?: number;
+}
+
 export type TestStep =
   | { kind: "set"; path: string; value: JsonValue }
   | { kind: "call"; target?: string; arguments?: Record<string, JsonValue>; cycles?: number }
@@ -165,6 +171,7 @@ export interface SemanticTestReport {
   diagnostics: Diagnostic[];
   artifacts?: {
     normalizedFiles?: NormalizedFile[];
+    testFile?: { path: string; content: string };
     generatedTestFile?: { path: string; content: string };
     stdout?: string;
     stderr?: string;

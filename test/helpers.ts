@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { NormalizeRequest, TcGenTestSpec } from "../src/domain/models.js";
+import { FrameworkTestConfig, NormalizeRequest, TcGenTestSpec } from "../src/domain/models.js";
 
 export const exampleNames = [
   "adder",
@@ -10,11 +10,18 @@ export const exampleNames = [
   "gvl-reference",
   "parameter-list",
   "state-machine",
-  "timer"
+  "timer",
+  "framework-limit-counter"
 ];
 
-export function loadRequest(name: string): NormalizeRequest & { testSpec: TcGenTestSpec } {
+export type FixtureRequest = NormalizeRequest & { testSpec?: TcGenTestSpec; frameworkTest?: FrameworkTestConfig };
+
+export function loadRequest(name: string): FixtureRequest {
   return JSON.parse(readFileSync(join("examples", name, "request.json"), "utf8"));
+}
+
+export function loadTestFixture(name: string): FixtureRequest {
+  return JSON.parse(readFileSync(join("test", "fixtures", name), "utf8"));
 }
 
 export function localStrucppRepo(): string | undefined {

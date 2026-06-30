@@ -1,0 +1,29 @@
+{
+  "profile": "tcgen-strucpp-v1",
+  "sources": [
+    {
+      "path": "framework-core.st",
+      "content": "PARAMETER_LIST PL_TestConfig\nVAR_GLOBAL CONSTANT\n    c_udiMaxTests : UDINT := 40;\nEND_VAR\nEND_PARAMETER_LIST\n\nTYPE E_TestState :\n(\n    eTestState_Idle := 0,\n    eTestState_Running := 1,\n    eTestState_Passed := 2,\n    eTestState_Failed := 3,\n    eTestState_Error := 4,\n    eTestState_Skipped := 5\n);\nEND_TYPE\n\nTYPE ST_TestCaseResult :\nSTRUCT\n    sName : STRING(127);\n    eState : E_TestState;\n    udiAssertions : UDINT;\n    udiPassed : UDINT;\n    udiFailed : UDINT;\n    sErrorMessage : STRING(255);\nEND_STRUCT\nEND_TYPE\n\nGVL GVL_TestResults\nVAR_GLOBAL\n    xStartTests : BOOL;\n    xAllDone : BOOL;\n    xAnyFailed : BOOL;\n    udiFailed : UDINT;\nEND_VAR\nEND_GVL\n\nINTERFACE I_TestCase\nMETHOD PUBLIC m_stGetResult : ST_TestCaseResult\nEND_METHOD\nEND_INTERFACE\n\nFUNCTION_BLOCK ABSTRACT FB_TestCaseBase IMPLEMENTS I_TestCase\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK FB_TestRunner\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "path": "cut.st",
+      "content": "FUNCTION_BLOCK FB_LimitCounter\nVAR_INPUT\n    i_xReset : BOOL;\n    i_xEnable : BOOL;\n    i_nLimit : DINT;\nEND_VAR\nVAR_OUTPUT\n    q_nCount : DINT;\nEND_VAR\nIF i_xReset THEN\n    q_nCount := 0;\nELSIF i_xEnable THEN\n    q_nCount := q_nCount + 1;\nEND_IF\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "path": "test.st",
+      "content": "FUNCTION_BLOCK FB_Test_LimitCounter EXTENDS FB_TestCaseBase\nVAR\n    fbCut : FB_LimitCounter;\nEND_VAR\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'FB_LimitCounter clamps at max';\n    _eExecuteState := eTestState_Running;\n    fbCut(i_xReset := TRUE, i_xEnable := FALSE, i_nLimit := 3);\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(1, fbCut.q_nCount, 'first count should be 1');\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(2, fbCut.q_nCount, 'second count should be 2');\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(3, fbCut.q_nCount, 'third count should be 3');\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(3, fbCut.q_nCount, 'counter should clamp at limit');\n    _eExecuteState := eTestState_Passed;\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "path": "main.st",
+      "content": "PROGRAM MAIN\nVAR\n    fbRunner : FB_TestRunner;\n    fbTest : FB_Test_LimitCounter;\n    itfTest : I_TestCase := fbTest;\n    _xInitDone : BOOL := FALSE;\nEND_VAR\nIF NOT _xInitDone THEN\n    fbRunner.m_udiRegisterTest(itfTest);\n    _xInitDone := TRUE;\nEND_IF\nfbRunner();\nEND_PROGRAM\n"
+    }
+  ],
+  "frameworkTest": {
+    "mode": "tcgen-test-framework",
+    "testFunctionBlocks": ["FB_Test_LimitCounter"],
+    "maxScans": 20
+  },
+  "options": {
+    "includeArtifacts": true
+  }
+}
