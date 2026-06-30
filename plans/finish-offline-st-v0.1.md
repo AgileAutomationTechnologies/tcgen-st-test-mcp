@@ -19,6 +19,6 @@ fixtures, using the local STruC++ checkout and a Windows GCC toolchain.
 
 ## Verification
 
-- Build STruC++ 0.5.12 from the local checkout and run one native STruC++ test.
+- Build the AAT STruC++ `development` checkout and run one native STruC++ test.
 - Run ST MCP typecheck, unit tests, build, CLI smokes, and MCP stdio smoke.
 - Re-run the existing TcGen pack installer tests and cloud registry policy tests.

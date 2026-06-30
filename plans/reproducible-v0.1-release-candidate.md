@@ -7,8 +7,8 @@ candidate without changing MCP tool names or request shapes.
 
 ## Implementation Notes
 
-- Keep STruC++ external and document the local 0.5.12 commit used for this
-  Windows validation slice.
+- Keep STruC++ external and document the AAT `development` commit used for this
+  Windows validation slice, based on upstream STruC++ 0.5.12.
 - Add schema-backed validation and package/report schemas while preserving the
   current JSON fields.
 - Make fixture and MCP smokes repeatable through npm scripts and CI.

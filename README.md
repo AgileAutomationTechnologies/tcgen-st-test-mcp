@@ -72,6 +72,10 @@ npm run build
 For local development against a sibling STruC++ checkout:
 
 ```powershell
+git clone https://github.com/AgileAutomationTechnologies/STruCpp.git C:\Users\fboid\source\python\STruCpp
+cd C:\Users\fboid\source\python\STruCpp
+git checkout development
+
 $env:STRUCPP_PATH = "C:\Users\fboid\source\python\STruCpp"
 $env:STRUCPP_GPP_PATH = "C:\msys64\ucrt64\bin\g++.exe"
 ```
@@ -80,9 +84,9 @@ $env:STRUCPP_GPP_PATH = "C:\msys64\ucrt64\bin\g++.exe"
 STruC++ repository root. `STRUCPP_GPP_PATH` is optional for backend checks, but
 `tcgen_st_test_run` needs a working `g++` for STruC++ `--test` execution.
 
-The v0.1 Windows validation target is STruC++ `0.5.12` plus local Windows fixes
-verified against commit `81d5aee48c3d25c7c0298124a87c5f42f85383be` until those
-fixes are available upstream.
+The v0.1 Windows validation target is the AgileAutomationTechnologies STruC++
+`development` branch at commit `0a398a643fad44905d2b786f4229e152cef531bd`,
+based on STruC++ `0.5.12` plus AAT Windows/compiler-launch fixes.
 
 ## Verification
 
