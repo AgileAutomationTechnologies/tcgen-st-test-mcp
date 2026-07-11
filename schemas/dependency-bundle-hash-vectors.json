@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "SHA-256 of the UTF-8 bytes of JavaScript JSON.stringify over [{path,content}], sorted by ECMAScript ordinal path then content comparison",
+  "hashEncoding": "lowercase hexadecimal",
+  "vectors": [
+    {
+      "name": "empty-bundle",
+      "sources": [],
+      "canonicalJson": "[]",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "name": "angle-brackets-and-apostrophe",
+      "sources": [
+        {
+          "path": "markup.st",
+          "content": "<tag attr='value'>x</tag>"
+        }
+      ],
+      "canonicalJson": "[{\"path\":\"markup.st\",\"content\":\"<tag attr='value'>x</tag>\"}]",
+      "sha256": "dce80a61a32f9ceb1e1c61ff6ed6424dea0376b4d44cbfd2968b8dd1ce255250"
+    },
+    {
+      "name": "quotes-and-backslashes",
+      "sources": [
+        {
+          "path": "quotes.st",
+          "content": "say \"hello\" at C:\\temp\\file.st"
+        }
+      ],
+      "canonicalJson": "[{\"path\":\"quotes.st\",\"content\":\"say \\\"hello\\\" at C:\\\\temp\\\\file.st\"}]",
+      "sha256": "d99b644ac2d81d6feb518d04cc74dca60c2e2d6b3e6865defd74506bf15e35ac"
+    },
+    {
+      "name": "whitespace-and-controls",
+      "sources": [
+        {
+          "path": "controls.st",
+          "content": "line1\r\nline2\n\tindent\u0001end"
+        }
+      ],
+      "canonicalJson": "[{\"path\":\"controls.st\",\"content\":\"line1\\r\\nline2\\n\\tindent\\u0001end\"}]",
+      "sha256": "4af95a47c5d6571085879d3be4dcff2d6972669541bda61b883afc95d5fc600e"
+    },
+    {
+      "name": "non-ascii-and-surrogate-pair",
+      "sources": [
+        {
+          "path": "unicode.st",
+          "content": "Grüße 世界 😀 𝄞"
+        }
+      ],
+      "canonicalJson": "[{\"path\":\"unicode.st\",\"content\":\"Grüße 世界 😀 𝄞\"}]",
+      "sha256": "07c95275f2ed1fd6fb8be2509754c9e64547676711fd33cc69823705407d79f3"
+    },
+    {
+      "name": "ordinal-source-order",
+      "sources": [
+        { "path": "z.st", "content": "second" },
+        { "path": "a.st", "content": "first" },
+        { "path": "a.st", "content": "First" }
+      ],
+      "canonicalJson": "[{\"path\":\"a.st\",\"content\":\"First\"},{\"path\":\"a.st\",\"content\":\"first\"},{\"path\":\"z.st\",\"content\":\"second\"}]",
+      "sha256": "bed95094efd861a5b72dd64c88698ea704c4953da985b9e80b96e934fec64249"
+    }
+  ]
+}

@@ -7,7 +7,7 @@ import {
   diagnostic
 } from "../domain/models.js";
 import { NormalizeResult, NormalizeRuntimeOptions } from "../normalizer/TcGenToStrucppNormalizer.js";
-import { FrameworkTestBuilder, omitFrameworkInfrastructure } from "./FrameworkTestBuilder.js";
+import { FrameworkTestBuilder, omitFrameworkInfrastructure, replaceFrameworkRunnerProgram } from "./FrameworkTestBuilder.js";
 import { GeneratedTestFile, StrucppTestGenerator } from "./StrucppTestGenerator.js";
 
 export type TestRequest = NormalizeRequest & {
@@ -18,10 +18,14 @@ export type TestRequest = NormalizeRequest & {
 export interface ResolvedTestFile extends GeneratedTestFile {
   sourceFiles: NormalizedFile[];
   mode?: "testSpec" | "framework";
+  discoveredFrameworkTests?: string[];
+  selectedFrameworkTests?: string[];
 }
 
 export function normalizerOptionsForTestRequest(request: TestRequest): NormalizeRuntimeOptions {
-  return hasFrameworkTest(request) ? { omitObject: omitFrameworkInfrastructure } : {};
+  return hasFrameworkTest(request)
+    ? { omitObject: omitFrameworkInfrastructure, replaceObject: replaceFrameworkRunnerProgram }
+    : {};
 }
 
 export function resolveTestFile(request: TestRequest, normalized: NormalizeResult): ResolvedTestFile {

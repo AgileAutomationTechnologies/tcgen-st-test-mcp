@@ -1,6 +1,6 @@
 {
   "name": "tcgen-st-test-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Offline TcGen Structured Text semantic test MCP server backed by STruC++.",
   "type": "module",
   "repository": {
@@ -20,11 +20,15 @@
   },
   "scripts": {
     "build": "tsc",
+    "bundle": "npm run build && node scripts/build-bundle.mjs",
+    "build:exe": "npm run bundle && pkg dist/tcgen-st-test-mcp.cjs --no-bytecode --public-packages \"*\" --public --targets node22-win-x64 --output dist/tcgen-st-test-mcp.exe --compress GZip",
     "fixtures": "node scripts/run-fixtures.mjs",
+    "pack:check": "npm run build:exe && node scripts/check-package.mjs && node scripts/smoke-bundle.mjs && node scripts/smoke-exe.mjs",
+    "prepack": "npm run build:exe",
     "smoke:mcp": "node scripts/smoke-mcp.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm test && npm run build",
+    "verify": "npm run typecheck && npm test && npm run bundle",
     "verify:native": "npm run build && npm run fixtures && npm run smoke:mcp"
   },
   "files": [
@@ -46,6 +50,8 @@
   "license": "GPL-3.0-or-later",
   "devDependencies": {
     "@types/node": "^26.0.1",
+    "@yao-pkg/pkg": "6.20.0",
+    "esbuild": "0.27.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   },

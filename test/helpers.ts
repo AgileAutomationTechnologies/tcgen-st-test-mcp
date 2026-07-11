@@ -11,7 +11,8 @@ export const exampleNames = [
   "parameter-list",
   "state-machine",
   "timer",
-  "framework-limit-counter"
+  "framework-limit-counter",
+  "framework-production-main"
 ];
 
 export type FixtureRequest = NormalizeRequest & { testSpec?: TcGenTestSpec; frameworkTest?: FrameworkTestConfig };

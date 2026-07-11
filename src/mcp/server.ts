@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline";
+import { packageVersion } from "../version.js";
 import { toolDefinitions, toolHandlers } from "./tools.js";
 
 type JsonRpcRequest = {
@@ -32,7 +33,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<Record<string, un
         result: {
           protocolVersion: "2025-11-25",
           capabilities: { tools: {} },
-          serverInfo: { name: "tcgen-st-test-mcp", version: "0.1.0" }
+          serverInfo: { name: "tcgen-st-test-mcp", version: packageVersion }
         }
       };
     case "notifications/initialized":

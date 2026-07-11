@@ -104,6 +104,37 @@ describe("failure paths", () => {
       expect(report.tests[0]?.message ?? "").toContain("counter should clamp at limit");
     });
   }, 60_000);
+
+  it("fails framework tests that complete without production assertions", async () => {
+    const repo = localStrucppRepo();
+    if (!repo) return;
+    const request = loadRequest("framework-limit-counter");
+    const testSource = request.sources.find(source => source.path === "test.st");
+    if (!testSource) throw new Error("framework fixture is missing test.st");
+    testSource.content = testSource.content
+      .split("\n")
+      .filter(line => !line.includes("m_xAssertEqualDint("))
+      .join("\n");
+
+    await withEnv({ STRUCPP_PATH: repo }, async () => {
+      const report = (await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>)) as SemanticTestReport;
+      expect(report.verdict).toBe("failed");
+      expect(report.summary.failed).toBe(1);
+      expect(report.tests[0]?.message ?? "").toContain("ASSERT_TRUE failed");
+    });
+  }, 60_000);
+
+  it("blocks a run whose scope excludes the candidate PROGRAM MAIN", async () => {
+    const request = loadRequest("framework-production-main");
+    request.scope = { mode: "entrypoints", entrypoints: ["FB_Test_ProductionMain"] };
+    const report = (await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>)) as SemanticTestReport;
+    expect(report.verdict).toBe("unsupported");
+    expect(report.diagnostics.map(item => item.code)).toContain("TCSUBJECT_CANDIDATE_SCOPE_EXCLUDED");
+    expect(report.normalization.includedObjects).not.toContain("MAIN");
+    expect(report.subject.discoveredFrameworkTests).toEqual(["FB_Test_ProductionMain"]);
+    expect(report.subject.selectedFrameworkTests).toEqual(["FB_Test_ProductionMain"]);
+  });
+
 });
 
 async function rmRetry(path: string): Promise<void> {

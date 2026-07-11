@@ -46,6 +46,41 @@ export function rewriteIdentifiersOutsideTrivia(text: string, replacements: Rewr
   return output;
 }
 
+export function stripTrivia(text: string): string {
+  let output = "";
+  let index = 0;
+  while (index < text.length) {
+    const current = text[index];
+    const next = text[index + 1] ?? "";
+    if (current === "'" || current === '"') {
+      const consumed = consumeQuoted(text, index, current);
+      output += maskTrivia(consumed.text);
+      index = consumed.end;
+      continue;
+    }
+    if (current === "/" && next === "/") {
+      const end = text.indexOf("\n", index);
+      if (end < 0) return output + maskTrivia(text.slice(index));
+      output += maskTrivia(text.slice(index, end));
+      index = end;
+      continue;
+    }
+    if (current === "(" && next === "*") {
+      const consumed = consumeNestedComment(text, index);
+      output += maskTrivia(consumed.text);
+      index = consumed.end;
+      continue;
+    }
+    output += current;
+    index++;
+  }
+  return output;
+}
+
+function maskTrivia(text: string): string {
+  return text.replace(/[^\r\n]/g, " ");
+}
+
 function consumeQuoted(text: string, start: number, quote: string): { text: string; end: number } {
   let index = start + 1;
   while (index < text.length) {

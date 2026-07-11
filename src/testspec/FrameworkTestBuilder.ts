@@ -6,7 +6,8 @@ import {
   TcGenObject,
   diagnostic
 } from "../domain/models.js";
-import { NormalizeResult, OmitObjectDecision } from "../normalizer/TcGenToStrucppNormalizer.js";
+import { NormalizeResult, OmitObjectDecision, ReplaceObjectDecision } from "../normalizer/TcGenToStrucppNormalizer.js";
+import { stripTrivia } from "../normalizer/tokenRewrite.js";
 
 export interface FrameworkTestFile {
   path: string;
@@ -15,6 +16,8 @@ export interface FrameworkTestFile {
   hash: string;
   sourceFiles: NormalizedFile[];
   mode: "framework";
+  discoveredFrameworkTests: string[];
+  selectedFrameworkTests: string[];
 }
 
 const frameworkInfrastructure = new Set([
@@ -41,17 +44,32 @@ export function omitFrameworkInfrastructure(object: TcGenObject): OmitObjectDeci
     return frameworkCoreDecision(object);
   }
 
-  if (object.kind === "program" && object.name.toLowerCase() === "main") {
-    return {
-      code: "TCFRAMEWORK_MAIN_OMITTED",
-      message: "PROGRAM MAIN was omitted from offline framework execution; generated STruC++ tests run concrete FB_Test_* blocks directly.",
-      severity: "info",
-      ruleId: "ApplyOfflineFrameworkShim",
-      affectsStatus: false
-    };
-  }
-
   return undefined;
+}
+
+export function replaceFrameworkRunnerProgram(object: TcGenObject): ReplaceObjectDecision | undefined {
+  if (object.kind !== "program" || !isFrameworkRunnerProgram(object)) return undefined;
+  const marker = "_tcgenOfflineFrameworkRegistrationValidated";
+  return {
+    content: [
+      `PROGRAM ${object.name}`,
+      "VAR",
+      `    ${marker} : BOOL := TRUE;`,
+      "END_VAR",
+      `${marker} := TRUE;`,
+      "END_PROGRAM"
+    ].join("\n"),
+    code: "TCFRAMEWORK_RUNNER_PROGRAM_REWRITTEN",
+    message:
+      `Framework runner PROGRAM '${object.qualifiedName}' was structurally validated through FB_TestRunner registration and replaced by a compiled offline registration surrogate; generated wrappers execute the concrete tests directly.`,
+    severity: "info",
+    ruleId: "ApplyOfflineFrameworkRunnerSurrogate"
+  };
+}
+
+function isFrameworkRunnerProgram(object: TcGenObject): boolean {
+  const text = stripTrivia(`${object.declarationText}\n${object.implementationText}`);
+  return /\bFB_TestRunner\b/i.test(text) && /\bm_udiRegisterTest\s*\(/i.test(text);
 }
 
 export class FrameworkTestBuilder {
@@ -71,7 +89,13 @@ export class FrameworkTestBuilder {
       })
     );
 
-    if (diagnostics.some(item => item.blocking)) return emptyFrameworkTest(diagnostics);
+    if (diagnostics.some(item => item.blocking)) {
+      return emptyFrameworkTest(
+        diagnostics,
+        candidates.map(testBlock => testBlock.name),
+        selected.map(testBlock => testBlock.name)
+      );
+    }
 
     const maxScans = clampMaxScans(config.maxScans);
     const content = emitWrapperTests(selected, maxScans);
@@ -81,7 +105,9 @@ export class FrameworkTestBuilder {
       diagnostics,
       hash: sha256(content),
       sourceFiles: [{ path: "tcgen_framework_shim.st", content: frameworkShim }],
-      mode: "framework"
+      mode: "framework",
+      discoveredFrameworkTests: candidates.map(testBlock => testBlock.name),
+      selectedFrameworkTests: selected.map(testBlock => testBlock.name)
     };
   }
 }
@@ -96,14 +122,20 @@ function frameworkCoreDecision(object: TcGenObject): OmitObjectDecision {
   };
 }
 
-function emptyFrameworkTest(diagnostics: Diagnostic[]): FrameworkTestFile {
+function emptyFrameworkTest(
+  diagnostics: Diagnostic[],
+  discoveredFrameworkTests: string[] = [],
+  selectedFrameworkTests: string[] = []
+): FrameworkTestFile {
   return {
     path: "semantic_framework_tests.st",
     content: "",
     diagnostics,
     hash: "",
     sourceFiles: [],
-    mode: "framework"
+    mode: "framework",
+    discoveredFrameworkTests,
+    selectedFrameworkTests
   };
 }
 
@@ -155,6 +187,17 @@ function selectTestFunctionBlocks(
   if (selected.length === 0 && !diagnostics.some(item => item.code === "TCFRAMEWORK_TEST_NOT_FOUND")) {
     diagnostics.push(diagnostic("error", "TCFRAMEWORK_TESTS_NOT_FOUND", "No framework tests were selected."));
   }
+  const selectedNames = new Set(selected.map(testBlock => testBlock.name.toLowerCase()));
+  const omitted = candidates.filter(testBlock => !selectedNames.has(testBlock.name.toLowerCase())).map(testBlock => testBlock.name);
+  if (omitted.length > 0) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "TCFRAMEWORK_TEST_SELECTION_INCOMPLETE",
+        `frameworkTest.testFunctionBlocks must include every discovered submitted framework test; omitted: ${omitted.join(", ")}. Submit only the relevant test sources to focus a run.`
+      )
+    );
+  }
   return selected;
 }
 
@@ -188,10 +231,10 @@ function emitWrapperTests(testBlocks: TcGenObject[], maxScans: number): string {
     lines.push("END_IF");
     lines.push(`result := ${instance}.m_stGetResult();`);
     lines.push("ASSERT_TRUE(done);");
+    lines.push("ASSERT_TRUE(result.udiAssertions > 0);");
     lines.push("ASSERT_EQ(result.sErrorMessage, '');");
     lines.push("ASSERT_EQ(result.udiFailed, 0);");
     lines.push("ASSERT_EQ(result.eState, eTestState_Passed);");
-    lines.push("ASSERT_TRUE(result.udiAssertions > 0);");
     lines.push("END_TEST", "");
   }
   return lines.join("\n").trimEnd() + "\n";

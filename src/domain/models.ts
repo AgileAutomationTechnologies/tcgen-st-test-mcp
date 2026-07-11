@@ -99,9 +99,18 @@ export interface NormalizationSummary {
 
 export interface NormalizeRequest {
   profile?: "tcgen-strucpp-v1";
+  candidateSourcePath: string;
   sources: SourceFile[];
   scope?: { mode: "all" | "entrypoints"; entrypoints?: string[]; additionalSymbols?: string[] };
   options?: { strict?: boolean; includeNormalizedSources?: boolean; autoClose?: boolean };
+}
+
+export interface SemanticTestSubject {
+  candidateSourcePath: string;
+  candidateSha256?: string;
+  dependencyBundleSha256?: string;
+  discoveredFrameworkTests?: string[];
+  selectedFrameworkTests?: string[];
 }
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
@@ -151,6 +160,7 @@ export interface BackendCheckResult {
 
 export interface SemanticTestReport {
   schemaVersion: 1;
+  subject: SemanticTestSubject;
   verdict: SemanticVerdict;
   backend: {
     name: "strucpp";

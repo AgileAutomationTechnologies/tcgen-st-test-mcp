@@ -122,10 +122,11 @@ const diagnosticSchema = {
 export const normalizationReportSchema = {
   $id: "https://tcgen.dev/schemas/normalization-report.schema.json",
   type: "object",
-  required: ["schemaVersion", "parseStatus", "compatibilityStatus", "normalizedFiles", "normalization", "diagnostics", "hashes"],
+  required: ["schemaVersion", "subject", "parseStatus", "compatibilityStatus", "normalizedFiles", "normalization", "diagnostics", "hashes"],
   additionalProperties: false,
   properties: {
     schemaVersion: { const: 1 },
+    subject: { $ref: "#/$defs/semanticTestSubject" },
     parseStatus: { enum: ["ok", "error"] },
     compatibilityStatus: { enum: ["exact", "rewritten", "partial", "blocked"] },
     normalizedFiles: {
@@ -153,10 +154,11 @@ export const normalizationReportSchema = {
 export const semanticReportSchema = {
   $id: "https://tcgen.dev/schemas/semantic-report.schema.json",
   type: "object",
-  required: ["schemaVersion", "verdict", "backend", "normalization", "summary", "tests", "diagnostics", "hashes", "qualification"],
+  required: ["schemaVersion", "subject", "verdict", "backend", "normalization", "summary", "tests", "diagnostics", "hashes", "qualification"],
   additionalProperties: false,
   properties: {
     schemaVersion: { const: 1 },
+    subject: { $ref: "#/$defs/semanticTestSubject" },
     verdict: { enum: ["passed", "failed", "partial", "unsupported", "compile_error", "backend_error", "timeout"] },
     backend: {
       type: "object",
@@ -264,6 +266,26 @@ function commonReportDefs() {
       properties: {
         path: { type: "string" },
         content: { type: "string" }
+      }
+    },
+    semanticTestSubject: {
+      type: "object",
+      required: ["candidateSourcePath"],
+      additionalProperties: false,
+      properties: {
+        candidateSourcePath: { type: "string" },
+        candidateSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        dependencyBundleSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        discoveredFrameworkTests: {
+          type: "array",
+          uniqueItems: true,
+          items: { type: "string", minLength: 1 }
+        },
+        selectedFrameworkTests: {
+          type: "array",
+          uniqueItems: true,
+          items: { type: "string", minLength: 1 }
+        }
       }
     },
     normalizationSummary: {

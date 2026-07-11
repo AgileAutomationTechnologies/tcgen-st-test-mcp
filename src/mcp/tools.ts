@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { StrucppBackend } from "../backends/StrucppBackend.js";
-import { NormalizeRequest, SemanticTestReport, diagnostic } from "../domain/models.js";
+import { NormalizeRequest, SemanticTestReport, SemanticTestSubject, diagnostic } from "../domain/models.js";
 import { TcGenToStrucppNormalizer } from "../normalizer/TcGenToStrucppNormalizer.js";
 import { normalizerOptionsForTestRequest, resolveTestFile, TestRequest } from "../testspec/TestFileResolver.js";
 import { WorkspaceManager } from "../workspace/WorkspaceManager.js";
@@ -29,6 +29,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const result = new TcGenToStrucppNormalizer().normalize(request);
     const response = {
       schemaVersion: 1,
+      subject: result.subject,
       parseStatus: result.document.diagnostics.some(item => item.blocking) ? "error" : "ok",
       compatibilityStatus: result.normalization.status,
       normalizedFiles: request.options?.includeNormalizedSources === false ? [] : result.normalizedFiles,
@@ -48,6 +49,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
     if (generated.hash) hashes.testSource = generated.hash;
     return {
       schemaVersion: 1,
+      subject: subjectForTest(normalizedForReport.subject, generated),
       normalization: normalizedForReport.normalization,
       normalizedFiles: request.options?.includeNormalizedSources === false ? [] : normalizedForReport.normalizedFiles,
       testFile: { path: generated.path, content: generated.content },
@@ -61,7 +63,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const request = args as unknown as TestRequest & {
       options?: NormalizeRequest["options"] & { timeoutMs?: number; keepWorkspace?: boolean; includeArtifacts?: boolean };
     };
-    const normalized = new TcGenToStrucppNormalizer().normalize(request, normalizerOptionsForTestRequest(request));
+    const normalized = new TcGenToStrucppNormalizer().normalize(request, {
+      ...normalizerOptionsForTestRequest(request),
+      requireCandidateScopeCoverage: true
+    });
     const testFile = resolveTestFile(request, normalized);
     const normalizedForRun = withRuntimeSourceFiles(normalized, testFile.sourceFiles);
     const keepWorkspace = request.options?.keepWorkspace === true && process.env.TCGEN_ST_ALLOW_KEEP_WORKSPACE === "true";
@@ -143,7 +148,15 @@ export async function runCli(argv: string[]): Promise<number> {
 function buildReport(input: {
   verdict: SemanticTestReport["verdict"] | "passed" | "failed";
   normalized: ReturnType<TcGenToStrucppNormalizer["normalize"]>;
-  testFile: { path: string; content: string; diagnostics: unknown[]; hash: string };
+  testFile: {
+    path: string;
+    content: string;
+    diagnostics: unknown[];
+    hash: string;
+    mode?: "testSpec" | "framework";
+    discoveredFrameworkTests?: string[];
+    selectedFrameworkTests?: string[];
+  };
   diagnostics: SemanticTestReport["diagnostics"];
   backendResult?: { executable?: string; version?: string; cliMode?: "native" | "node"; gppExecutable?: string; stdout: string; stderr: string; tests: SemanticTestReport["tests"] };
   includeArtifacts?: boolean;
@@ -162,6 +175,7 @@ function buildReport(input: {
 
   const report: SemanticTestReport = {
     schemaVersion: 1,
+    subject: subjectForTest(input.normalized.subject, input.testFile),
     verdict,
     backend,
     normalization: input.normalized.normalization,
@@ -218,7 +232,15 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
         safetyLevel: name === "tcgen_st_backend_check" || name === "tcgen_st_test_run" ? "external_process" : "read_only",
         resultKind: name === "tcgen_st_test_run" ? "build_result" : "structured_summary",
         modelContentPath: "",
-        evidencePaths: ["structuredContent.verdict", "structuredContent.normalization.status", "structuredContent.diagnostics"],
+        evidencePaths: [
+          "structuredContent.verdict",
+          "structuredContent.subject.candidateSha256",
+          "structuredContent.subject.dependencyBundleSha256",
+          "structuredContent.subject.discoveredFrameworkTests",
+          "structuredContent.subject.selectedFrameworkTests",
+          "structuredContent.normalization.status",
+          "structuredContent.diagnostics"
+        ],
         dedupeKeyPaths: ["arguments", "structuredContent.hashes.request"],
         projectContextBinding: "none",
         structuredTextInput: true,
@@ -234,11 +256,18 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
 function normalizeSchema(requireTestSpec: boolean): Record<string, unknown> {
   const properties: Record<string, unknown> = {
     profile: { type: "string", enum: ["tcgen-strucpp-v1"] },
+    candidateSourcePath: {
+      type: "string",
+      minLength: 1,
+      description: "Exact path of the single source candidate whose content is being validated."
+    },
     sources: {
       type: "array",
+      minItems: 1,
       items: {
         type: "object",
         required: ["path", "content"],
+        additionalProperties: false,
         properties: {
           path: { type: "string" },
           content: { type: "string" }
@@ -247,6 +276,7 @@ function normalizeSchema(requireTestSpec: boolean): Record<string, unknown> {
     },
     scope: {
       type: "object",
+      description: "Optional dependency focus. tcgen_st_test_run always requires every object from candidateSourcePath to remain selected and emitted.",
       properties: {
         mode: { type: "string", enum: ["all", "entrypoints"] },
         entrypoints: { type: "array", items: { type: "string" } },
@@ -270,14 +300,19 @@ function normalizeSchema(requireTestSpec: boolean): Record<string, unknown> {
       type: "object",
       properties: {
         mode: { type: "string", enum: ["tcgen-test-framework"] },
-        testFunctionBlocks: { type: "array", items: { type: "string" } },
+        testFunctionBlocks: {
+          type: "array",
+          items: { type: "string" },
+          description: "When provided, must include every discovered submitted FB_Test_* framework test. Focus by omitting unrelated test sources."
+        },
         maxScans: { type: "number" }
       }
     };
   }
   return {
     type: "object",
-    required: ["sources"],
+    required: ["candidateSourcePath", "sources"],
+    additionalProperties: false,
     properties
   };
 }
@@ -300,5 +335,21 @@ function withRuntimeSourceFiles(
       ...normalized.hashes,
       normalizedSource: normalizedSource ? sha256(normalizedSource) : normalized.hashes.normalizedSource
     }
+  };
+}
+
+function subjectForTest(
+  subject: SemanticTestSubject,
+  testFile: {
+    mode?: "testSpec" | "framework";
+    discoveredFrameworkTests?: string[];
+    selectedFrameworkTests?: string[];
+  }
+): SemanticTestSubject {
+  if (testFile.mode !== "framework") return { ...subject };
+  return {
+    ...subject,
+    discoveredFrameworkTests: [...(testFile.discoveredFrameworkTests ?? [])],
+    selectedFrameworkTests: [...(testFile.selectedFrameworkTests ?? [])]
   };
 }

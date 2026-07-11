@@ -1,5 +1,6 @@
 {
   "profile": "tcgen-strucpp-v1",
+  "candidateSourcePath": "limited.st",
   "sources": [
     {
       "path": "limited.st",

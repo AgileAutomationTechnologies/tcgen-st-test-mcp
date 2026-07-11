@@ -3,10 +3,11 @@
   "$id": "https://tcgen.dev/schemas/normalization-report.schema.json",
   "title": "NormalizationReport",
   "type": "object",
-  "required": ["schemaVersion", "parseStatus", "compatibilityStatus", "normalizedFiles", "normalization", "diagnostics", "hashes"],
+  "required": ["schemaVersion", "subject", "parseStatus", "compatibilityStatus", "normalizedFiles", "normalization", "diagnostics", "hashes"],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": { "const": 1 },
+    "subject": { "$ref": "#/$defs/semanticTestSubject" },
     "parseStatus": { "enum": ["ok", "error"] },
     "compatibilityStatus": { "enum": ["exact", "rewritten", "partial", "blocked"] },
     "normalizedFiles": {
@@ -76,6 +77,26 @@
       "properties": {
         "path": { "type": "string" },
         "content": { "type": "string" }
+      }
+    },
+    "semanticTestSubject": {
+      "type": "object",
+      "required": ["candidateSourcePath"],
+      "additionalProperties": false,
+      "properties": {
+        "candidateSourcePath": { "type": "string" },
+        "candidateSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "dependencyBundleSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "discoveredFrameworkTests": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "selectedFrameworkTests": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
       }
     },
     "normalizationSummary": {

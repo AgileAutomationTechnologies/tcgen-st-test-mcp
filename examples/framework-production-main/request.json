@@ -1,0 +1,26 @@
+{
+  "profile": "tcgen-strucpp-v1",
+  "candidateSourcePath": "main.st",
+  "sources": [
+    {
+      "path": "framework-core.st",
+      "content": "FUNCTION_BLOCK ABSTRACT FB_TestCaseBase\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "path": "main.st",
+      "content": "PROGRAM MAIN\nVAR\n    nCycles : DINT;\nEND_VAR\n// Production comments do not make this an FB_TestRunner m_udiRegisterTest(fake) registration program.\nnCycles := nCycles + 1;\nEND_PROGRAM\n"
+    },
+    {
+      "path": "test.st",
+      "content": "FUNCTION_BLOCK FB_Test_ProductionMain EXTENDS FB_TestCaseBase\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'production MAIN remains compiled';\n    _eExecuteState := eTestState_Running;\n    m_xAssertTrue(TRUE, 'framework smoke assertion');\n    _eExecuteState := eTestState_Passed;\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
+    }
+  ],
+  "frameworkTest": {
+    "mode": "tcgen-test-framework",
+    "testFunctionBlocks": ["FB_Test_ProductionMain"],
+    "maxScans": 20
+  },
+  "options": {
+    "includeArtifacts": true
+  }
+}

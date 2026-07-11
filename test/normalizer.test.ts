@@ -40,6 +40,7 @@ describe("TcGen to STruC++ normalizer", () => {
 
   it("blocks selected unsupported syntax and unsafe paths", () => {
     const result = new TcGenToStrucppNormalizer().normalize({
+      candidateSourcePath: "../unsafe.st",
       sources: [
         {
           path: "../unsafe.st",
@@ -54,6 +55,7 @@ describe("TcGen to STruC++ normalizer", () => {
 
   it("blocks missing child owners and unknown pragmas in strict mode", () => {
     const result = new TcGenToStrucppNormalizer().normalize({
+      candidateSourcePath: "bad.st",
       sources: [
         {
           path: "bad.st",
@@ -68,6 +70,7 @@ describe("TcGen to STruC++ normalizer", () => {
 
   it("blocks selected ACTION and graphical language bodies", () => {
     const result = new TcGenToStrucppNormalizer().normalize({
+      candidateSourcePath: "unsupported.st",
       sources: [
         {
           path: "unsupported.st",

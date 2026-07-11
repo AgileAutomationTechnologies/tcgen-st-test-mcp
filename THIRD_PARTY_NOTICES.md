@@ -7,9 +7,10 @@ Autonomy / OpenPLC Project under GPL-3.0-or-later:
 
 https://github.com/Autonomy-Logic/STruCpp
 
-The v0.1 compatibility target is STruC++ 0.5.12. The local Windows validation
-slice was verified against commit `81d5aee48c3d25c7c0298124a87c5f42f85383be`
-until the required Windows fixes are released upstream.
+The v0.2 compatibility target is STruC++ 0.5.12. The local Windows validation
+slice is pinned to the AgileAutomationTechnologies `development` branch at
+commit `0a398a643fad44905d2b786f4229e152cef531bd`, including the required
+Windows/compiler-launch fixes.
 
 ## Ajv
 
@@ -24,6 +25,21 @@ TypeScript is used to build this package.
 
 - Project: https://github.com/microsoft/TypeScript
 - License: Apache-2.0
+
+## esbuild
+
+esbuild produces the self-contained MCP product bundle.
+
+- Project: https://github.com/evanw/esbuild
+- License: MIT
+
+## @yao-pkg/pkg
+
+`@yao-pkg/pkg` packages the MCP bundle with a Node.js 22 runtime for the
+standalone Windows executable.
+
+- Project: https://github.com/yao-pkg/pkg
+- License: MIT
 
 ## Vitest
 

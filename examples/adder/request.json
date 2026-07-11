@@ -1,5 +1,6 @@
 {
   "profile": "tcgen-strucpp-v1",
+  "candidateSourcePath": "adder.st",
   "sources": [
     {
       "path": "adder.st",

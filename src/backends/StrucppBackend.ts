@@ -45,20 +45,21 @@ export class StrucppBackend {
         backend: "strucpp",
         available: false,
         testedVersion,
-        diagnostics: [diagnostic("error", "STRUCPP_NOT_FOUND", "STruC++ executable was not found via STRUCPP_PATH or PATH.")]
+        diagnostics:
+          diagnostics.length > 0
+            ? diagnostics
+            : [diagnostic("error", "STRUCPP_NOT_FOUND", "STruC++ executable was not found via STRUCPP_PATH or PATH.")]
       };
     }
 
     const version = await runVersion(command, diagnostics);
     const gpp = await resolveGpp(false);
     diagnostics.push(...gpp.diagnostics);
-    if (version && !version.includes(testedVersion)) {
-      diagnostics.push(diagnostic("warning", "STRUCPP_VERSION_UNTESTED", `STruC++ version '${version}' differs from tested ${testedVersion}.`, { blocking: false }));
-    }
+    const versionAccepted = validateTestedVersion(version, diagnostics);
 
     return {
       backend: "strucpp",
-      available: true,
+      available: versionAccepted,
       executable: command.executable,
       command: command.command,
       argumentsPrefix: command.argsPrefix,
@@ -81,12 +82,31 @@ export class StrucppBackend {
         stderr: "",
         exitCode: null,
         durationMs: 0,
-        diagnostics: [diagnostic("error", "STRUCPP_NOT_FOUND", "STruC++ executable was not found via STRUCPP_PATH or PATH.")],
+        diagnostics:
+          diagnostics.length > 0
+            ? diagnostics
+            : [diagnostic("error", "STRUCPP_NOT_FOUND", "STruC++ executable was not found via STRUCPP_PATH or PATH.")],
         tests: []
       };
     }
 
     const version = await runVersion(command, diagnostics);
+    if (!validateTestedVersion(version, diagnostics)) {
+      return {
+        status: "backend_error",
+        executable: command.executable,
+        command: command.command,
+        argumentsPrefix: command.argsPrefix,
+        cliMode: command.mode,
+        version,
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        durationMs: 0,
+        diagnostics,
+        tests: []
+      };
+    }
     const gpp = await resolveGpp(true);
     diagnostics.push(...gpp.diagnostics);
     if (!gpp.available || !gpp.executable) {
@@ -146,21 +166,42 @@ export class StrucppBackend {
   }
 }
 
+function validateTestedVersion(version: string | undefined, diagnostics: Diagnostic[]): boolean {
+  if (!version) {
+    diagnostics.push(
+      diagnostic("error", "STRUCPP_VERSION_UNVERIFIED", `STruC++ ${testedVersion} is required, but the backend version could not be verified.`)
+    );
+    return false;
+  }
+  const detected = /\b\d+\.\d+\.\d+\b/.exec(version)?.[0];
+  if (detected === testedVersion) return true;
+  diagnostics.push(
+    diagnostic(
+      "error",
+      "STRUCPP_VERSION_MISMATCH",
+      `STruC++ version '${version}' is not accepted; this semantic runner is pinned to ${testedVersion}.`
+    )
+  );
+  return false;
+}
+
 async function resolveStrucpp(explicitPath: string | undefined, diagnostics: Diagnostic[]): Promise<ResolvedCommand | undefined> {
   if (explicitPath?.trim()) {
     const resolved = resolve(explicitPath.trim());
     const resolvedStat = await tryStat(resolved);
     if (resolvedStat?.isDirectory()) {
-      const repoCli = join(resolved, "dist", "node", "cli.js");
-      if (await fileExists(repoCli)) return nodeCommand(repoCli, resolved);
       const bundledWin = join(resolved, "dist", "bin", "strucpp-win.exe");
       if (await fileExists(bundledWin)) return nativeCommand(bundledWin, resolved);
+      const repoCli = join(resolved, "dist", "node", "cli.js");
+      if (await fileExists(repoCli)) return resolveNodeCommand(repoCli, resolved, diagnostics);
       diagnostics.push(diagnostic("error", "STRUCPP_PATH_INVALID", `STRUCPP_PATH directory '${resolved}' does not contain dist/node/cli.js or a bundled strucpp executable.`));
       return undefined;
     }
 
     if (resolvedStat?.isFile()) {
-      return isJavaScriptCli(resolved) ? nodeCommand(resolved, inferRepoRootFromCli(resolved)) : nativeCommand(resolved, dirname(resolved));
+      return isJavaScriptCli(resolved)
+        ? resolveNodeCommand(resolved, inferRepoRootFromCli(resolved), diagnostics)
+        : nativeCommand(resolved, dirname(resolved));
     }
 
     diagnostics.push(diagnostic("error", "STRUCPP_PATH_INVALID", `STRUCPP_PATH '${resolved}' does not exist.`));
@@ -200,14 +241,53 @@ async function resolveGpp(forRun: boolean): Promise<ResolvedGpp> {
   };
 }
 
-function nodeCommand(cliPath: string, cwd?: string): ResolvedCommand {
+async function resolveNodeCommand(
+  cliPath: string,
+  cwd: string | undefined,
+  diagnostics: Diagnostic[]
+): Promise<ResolvedCommand | undefined> {
+  let nodeExecutable = process.execPath;
+  if (isPackagedRuntime()) {
+    const explicit = process.env.TCGEN_ST_NODE_PATH?.trim();
+    if (explicit) {
+      const resolved = resolve(explicit);
+      if (!(await fileExists(resolved)) || samePath(resolved, process.execPath)) {
+        diagnostics.push(
+          diagnostic("error", "TCGEN_ST_NODE_PATH_INVALID", `TCGEN_ST_NODE_PATH '${resolved}' does not identify an external Node.js executable.`)
+        );
+        return undefined;
+      }
+      nodeExecutable = resolved;
+    } else {
+      const pathNode = await locateExecutable("node");
+      if (!pathNode || samePath(pathNode, process.execPath)) {
+        diagnostics.push(
+          diagnostic(
+            "error",
+            "STRUCPP_NODE_RUNTIME_NOT_FOUND",
+            "The standalone MCP executable cannot launch a JavaScript STruC++ CLI through itself. Configure TCGEN_ST_NODE_PATH, add an external Node.js executable to PATH, or point STRUCPP_PATH at native strucpp-win.exe."
+          )
+        );
+        return undefined;
+      }
+      nodeExecutable = pathNode;
+    }
+  }
   return {
     executable: cliPath,
-    command: process.execPath,
+    command: nodeExecutable,
     argsPrefix: [cliPath],
     mode: "node",
     cwd
   };
+}
+
+function isPackagedRuntime(): boolean {
+  return Boolean((process as NodeJS.Process & { pkg?: unknown }).pkg);
+}
+
+function samePath(left: string, right: string): boolean {
+  return resolve(left).toLowerCase() === resolve(right).toLowerCase();
 }
 
 function nativeCommand(executable: string, cwd?: string): ResolvedCommand {

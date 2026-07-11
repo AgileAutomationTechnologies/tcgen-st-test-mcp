@@ -5,15 +5,18 @@ import {
   NormalizationSummary,
   NormalizedFile,
   RewriteRecord,
+  SemanticTestSubject,
   TcGenDocument,
   TcGenObject,
   diagnostic
 } from "../domain/models.js";
+import { resolveSourceSubject } from "../domain/sourceSubject.js";
 import { TcGenBundleParser } from "../parser/TcGenBundleParser.js";
 import { rewriteIdentifiersOutsideTrivia } from "./tokenRewrite.js";
 
 export interface NormalizeResult {
   document: TcGenDocument;
+  subject: SemanticTestSubject;
   normalization: NormalizationSummary;
   normalizedFiles: NormalizedFile[];
   hashes: { request: string; normalizedSource?: string };
@@ -27,16 +30,31 @@ export interface OmitObjectDecision {
   affectsStatus?: boolean;
 }
 
+export interface ReplaceObjectDecision {
+  content: string;
+  code: string;
+  message: string;
+  severity?: Diagnostic["severity"];
+  ruleId: string;
+}
+
 export interface NormalizeRuntimeOptions {
   omitObject?: (object: TcGenObject) => OmitObjectDecision | undefined;
+  replaceObject?: (object: TcGenObject) => ReplaceObjectDecision | undefined;
+  requireCandidateScopeCoverage?: boolean;
 }
 
 export class TcGenToStrucppNormalizer {
   normalize(request: NormalizeRequest, runtimeOptions: NormalizeRuntimeOptions = {}): NormalizeResult {
     const strict = request.options?.strict !== false;
+    const subjectResolution = resolveSourceSubject(request);
     const parser = new TcGenBundleParser();
     const document = parser.parseSources(request.sources ?? [], { autoClose: request.options?.autoClose === true });
-    const diagnostics: Diagnostic[] = [...document.diagnostics, ...validateRequestSources(request.sources ?? [])];
+    const diagnostics: Diagnostic[] = [
+      ...document.diagnostics,
+      ...validateRequestSources(request.sources ?? []),
+      ...subjectResolution.diagnostics
+    ];
     const rewrites: RewriteRecord[] = [];
     const profile = request.profile ?? "tcgen-strucpp-v1";
     if (profile !== "tcgen-strucpp-v1") {
@@ -44,11 +62,22 @@ export class TcGenToStrucppNormalizer {
     }
 
     const selected = selectObjects(document.objects, request.scope, diagnostics, strict);
+    if (runtimeOptions.requireCandidateScopeCoverage) {
+      validateCandidateScopeCoverage(document.objects, selected, request.candidateSourcePath, diagnostics);
+    }
     const omittedByRuntime = applyRuntimeOmissions(selected, diagnostics, runtimeOptions);
     const selectedForEmission = selected.filter(object => !omittedByRuntime.objects.has(object.qualifiedName.toLowerCase()));
-    analyzeCompatibility(selectedForEmission, diagnostics, strict);
+    const runtimeReplacements = applyRuntimeReplacements(selectedForEmission, diagnostics, rewrites, runtimeOptions);
+    analyzeCompatibility(
+      selectedForEmission.filter(object => !runtimeReplacements.has(object.qualifiedName.toLowerCase())),
+      diagnostics,
+      strict
+    );
     const symbolMap = buildSymbolMap(selectedForEmission, diagnostics);
-    const emitted = emitNormalized(selectedForEmission, symbolMap, diagnostics, rewrites, strict);
+    const emitted = emitNormalized(selectedForEmission, symbolMap, diagnostics, rewrites, strict, runtimeReplacements);
+    if (runtimeOptions.requireCandidateScopeCoverage) {
+      validateCandidateEmissionCoverage(document.objects, emitted.includedIds, request.candidateSourcePath, diagnostics);
+    }
     const normalizedContent = emitted.files.map(file => file.content).join("\n\n");
     const omittedObjects = [...emitted.omitted, ...omittedByRuntime.names];
     const blockedObjects = selectedForEmission
@@ -70,10 +99,11 @@ export class TcGenToStrucppNormalizer {
 
     return {
       document,
+      subject: subjectResolution.subject,
       normalization: {
         profile: "tcgen-strucpp-v1",
         status,
-        includedObjects: selected.map(object => object.qualifiedName),
+        includedObjects: emitted.included,
         omittedObjects,
         blockedObjects,
         symbolMap: Object.fromEntries(symbolMap),
@@ -84,6 +114,72 @@ export class TcGenToStrucppNormalizer {
       hashes
     };
   }
+}
+
+function applyRuntimeReplacements(
+  selected: TcGenObject[],
+  diagnostics: Diagnostic[],
+  rewrites: RewriteRecord[],
+  runtimeOptions: NormalizeRuntimeOptions
+): Map<string, string> {
+  const replacements = new Map<string, string>();
+  if (!runtimeOptions.replaceObject) return replacements;
+  for (const object of selected) {
+    const decision = runtimeOptions.replaceObject(object);
+    if (!decision) continue;
+    replacements.set(object.qualifiedName.toLowerCase(), decision.content);
+    diagnostics.push(
+      diagnostic(decision.severity ?? "info", decision.code, decision.message, {
+        blocking: false,
+        object: object.qualifiedName,
+        original: object.sourceSpan,
+        ruleId: decision.ruleId
+      })
+    );
+    const originalText = [object.declarationText, object.implementationText, terminatorFor(object.kind)].filter(Boolean).join("\n");
+    addRewrite(rewrites, decision.ruleId, object, originalText, decision.content);
+  }
+  return replacements;
+}
+
+function validateCandidateEmissionCoverage(
+  objects: TcGenObject[],
+  includedObjectIds: string[],
+  candidateSourcePath: string,
+  diagnostics: Diagnostic[]
+): void {
+  const included = new Set(includedObjectIds);
+  const omitted = objects
+    .filter(object => object.sourceSpan.path === candidateSourcePath && !included.has(object.id))
+    .map(object => object.qualifiedName)
+    .sort();
+  if (omitted.length === 0) return;
+  diagnostics.push(
+    diagnostic(
+      "error",
+      "TCSUBJECT_CANDIDATE_NOT_EMITTED",
+      `Candidate object${omitted.length === 1 ? " was" : "s were"} not emitted into the compiled semantic source: ${omitted.join(", ")}.`
+    )
+  );
+}
+
+function validateCandidateScopeCoverage(
+  objects: TcGenObject[],
+  selected: TcGenObject[],
+  candidateSourcePath: string,
+  diagnostics: Diagnostic[]
+): void {
+  const selectedIds = new Set(selected.map(object => object.id));
+  const excluded = objects.filter(object => object.sourceSpan.path === candidateSourcePath && !selectedIds.has(object.id));
+  if (excluded.length === 0) return;
+  const names = excluded.map(object => object.qualifiedName).sort();
+  diagnostics.push(
+    diagnostic(
+      "error",
+      "TCSUBJECT_CANDIDATE_SCOPE_EXCLUDED",
+      `scope excludes candidate object${names.length === 1 ? "" : "s"}: ${names.join(", ")}. Semantic test runs must include every object from candidateSourcePath.`
+    )
+  );
 }
 
 function applyRuntimeOmissions(
@@ -244,8 +340,9 @@ function emitNormalized(
   symbolMap: Map<string, string>,
   diagnostics: Diagnostic[],
   rewrites: RewriteRecord[],
-  strict: boolean
-): { files: NormalizedFile[]; omitted: string[] } {
+  strict: boolean,
+  runtimeReplacements: Map<string, string>
+): { files: NormalizedFile[]; included: string[]; includedIds: string[]; omitted: string[] } {
   const childrenByOwner = new Map<string, TcGenObject[]>();
   for (const object of objects) {
     if (!object.ownerName) continue;
@@ -255,6 +352,8 @@ function emitNormalized(
   }
 
   const chunks: string[] = [];
+  const included: string[] = [];
+  const includedIds: string[] = [];
   const omitted: string[] = [];
   for (const object of objects) {
     if (object.ownerName) continue;
@@ -263,27 +362,52 @@ function emitNormalized(
       continue;
     }
     if (hasBlockingDiagnostic(diagnostics, object)) {
-      omitted.push(object.qualifiedName);
+      omitted.push(object.qualifiedName, ...(childrenByOwner.get(object.qualifiedName.toLowerCase()) ?? []).map(child => child.qualifiedName));
+      continue;
+    }
+    const runtimeReplacement = runtimeReplacements.get(object.qualifiedName.toLowerCase());
+    if (runtimeReplacement !== undefined) {
+      chunks.push(runtimeReplacement.trimEnd());
+      included.push(object.qualifiedName);
+      includedIds.push(object.id);
+      omitted.push(...(childrenByOwner.get(object.qualifiedName.toLowerCase()) ?? []).map(child => child.qualifiedName));
       continue;
     }
     if (object.kind === "gvl" || object.kind === "parameterList") {
       const emitted = emitGlobalObject(object, symbolMap, diagnostics, rewrites, strict);
-      if (emitted) chunks.push(emitted);
+      if (emitted) {
+        chunks.push(emitted);
+        included.push(object.qualifiedName);
+        includedIds.push(object.id);
+      } else {
+        omitted.push(object.qualifiedName);
+      }
       continue;
     }
 
     const children = childrenByOwner.get(object.qualifiedName.toLowerCase()) ?? [];
     const declaration = normalizeDeclaration(object, diagnostics, rewrites, strict);
-    const nestedChildren = children
-      .filter(child => (child.kind === "method" || child.kind === "property") && !hasBlockingDiagnostic(diagnostics, child))
+    const emittedChildren = children.filter(
+      child => (child.kind === "method" || child.kind === "property") && !hasBlockingDiagnostic(diagnostics, child)
+    );
+    const nestedChildren = emittedChildren
       .map(child => normalizeChild(child, symbolMap, diagnostics, rewrites, strict))
       .join("\n\n");
+    const emittedChildIds = new Set(emittedChildren.map(child => child.id));
+    omitted.push(...children.filter(child => !emittedChildIds.has(child.id)).map(child => child.qualifiedName));
     const implementation = rewriteObjectText(object, object.implementationText, symbolMap, rewrites, "NormalizeGlobalLists");
     const parts = [declaration, nestedChildren, implementation].filter(part => part.trim());
     chunks.push(`${parts.join("\n\n")}\n${terminatorFor(object.kind)}`);
+    included.push(object.qualifiedName, ...emittedChildren.map(child => child.qualifiedName));
+    includedIds.push(object.id, ...emittedChildren.map(child => child.id));
   }
 
-  return { files: chunks.length > 0 ? [{ path: "normalized.st", content: chunks.join("\n\n") + "\n" }] : [], omitted };
+  return {
+    files: chunks.length > 0 ? [{ path: "normalized.st", content: chunks.join("\n\n") + "\n" }] : [],
+    included,
+    includedIds,
+    omitted
+  };
 }
 
 function normalizeDeclaration(object: TcGenObject, diagnostics: Diagnostic[], rewrites: RewriteRecord[], strict: boolean): string {

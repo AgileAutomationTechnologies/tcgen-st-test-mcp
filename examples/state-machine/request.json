@@ -1,5 +1,6 @@
 {
   "profile": "tcgen-strucpp-v1",
+  "candidateSourcePath": "state_machine.st",
   "sources": [
     {
       "path": "state_machine.st",
