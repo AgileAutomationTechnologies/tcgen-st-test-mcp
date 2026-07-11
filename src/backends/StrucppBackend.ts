@@ -1,4 +1,6 @@
-import { access, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, extname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { BackendCheckResult, Diagnostic, diagnostic } from "../domain/models.js";
@@ -33,14 +35,21 @@ type ResolvedGpp = {
   diagnostics: Diagnostic[];
 };
 
+type ResolvedBackend = {
+  command: ResolvedCommand;
+  version: string;
+};
+
 const testedVersion = "0.5.12";
-const defaultMsys2Gpp = "C:\\msys64\\ucrt64\\bin\\g++.exe";
+const developmentMsys2Gpp = "C:\\msys64\\ucrt64\\bin\\g++.exe";
+const bundledStrucppRelativePath = join("backend", "strucpp-win.exe");
+const bundledGppRelativePath = join("toolchain", "mingw64", "bin", "g++.exe");
 
 export class StrucppBackend {
   async check(): Promise<BackendCheckResult> {
     const diagnostics: Diagnostic[] = [];
-    const command = await resolveStrucpp(process.env.STRUCPP_PATH, diagnostics);
-    if (!command) {
+    const backend = await resolveCompatibleStrucpp(diagnostics);
+    if (!backend) {
       return {
         backend: "strucpp",
         available: false,
@@ -52,19 +61,18 @@ export class StrucppBackend {
       };
     }
 
-    const version = await runVersion(command, diagnostics);
-    const gpp = await resolveGpp(false);
+    const gpp = await resolveCompatibleGpp(true);
     diagnostics.push(...gpp.diagnostics);
-    const versionAccepted = validateTestedVersion(version, diagnostics);
+    const runtimeIntegrity = await verifyRuntimeManifest(diagnostics);
 
     return {
       backend: "strucpp",
-      available: versionAccepted,
-      executable: command.executable,
-      command: command.command,
-      argumentsPrefix: command.argsPrefix,
-      cliMode: command.mode,
-      version,
+      available: runtimeIntegrity && gpp.available,
+      executable: backend.command.executable,
+      command: backend.command.command,
+      argumentsPrefix: backend.command.argsPrefix,
+      cliMode: backend.command.mode,
+      version: backend.version,
       testedVersion,
       gppAvailable: gpp.available,
       gppExecutable: gpp.executable,
@@ -74,8 +82,8 @@ export class StrucppBackend {
 
   async run(sourcePaths: string[], testPath: string, options: { timeoutMs?: number } = {}): Promise<BackendRunResult> {
     const diagnostics: Diagnostic[] = [];
-    const command = await resolveStrucpp(process.env.STRUCPP_PATH, diagnostics);
-    if (!command) {
+    const backend = await resolveCompatibleStrucpp(diagnostics);
+    if (!backend) {
       return {
         status: "backend_error",
         stdout: "",
@@ -90,15 +98,14 @@ export class StrucppBackend {
       };
     }
 
-    const version = await runVersion(command, diagnostics);
-    if (!validateTestedVersion(version, diagnostics)) {
+    if (!(await verifyRuntimeManifest(diagnostics))) {
       return {
         status: "backend_error",
-        executable: command.executable,
-        command: command.command,
-        argumentsPrefix: command.argsPrefix,
-        cliMode: command.mode,
-        version,
+        executable: backend.command.executable,
+        command: backend.command.command,
+        argumentsPrefix: backend.command.argsPrefix,
+        cliMode: backend.command.mode,
+        version: backend.version,
         stdout: "",
         stderr: "",
         exitCode: null,
@@ -107,16 +114,16 @@ export class StrucppBackend {
         tests: []
       };
     }
-    const gpp = await resolveGpp(true);
+    const gpp = await resolveCompatibleGpp(true);
     diagnostics.push(...gpp.diagnostics);
     if (!gpp.available || !gpp.executable) {
       return {
         status: "backend_error",
-        executable: command.executable,
-        command: command.command,
-        argumentsPrefix: command.argsPrefix,
-        cliMode: command.mode,
-        version,
+        executable: backend.command.executable,
+        command: backend.command.command,
+        argumentsPrefix: backend.command.argsPrefix,
+        cliMode: backend.command.mode,
+        version: backend.version,
         gppExecutable: gpp.executable,
         stdout: "",
         stderr: "",
@@ -130,16 +137,16 @@ export class StrucppBackend {
     const timeoutMs = Math.min(Math.max(options.timeoutMs ?? 30_000, 1_000), 120_000);
     const args = [...sourcePaths, "--gpp", gpp.executable, "--test", testPath];
     const started = Date.now();
-    const result = await spawnWithTimeout(command, args, timeoutMs, gpp.executable);
+    const result = await spawnWithTimeout(backend.command, args, timeoutMs, gpp.executable);
     if (result.timedOut) {
       diagnostics.push(diagnostic("error", "SANDBOX_TIMEOUT", `STruC++ timed out after ${timeoutMs} ms.`));
       return {
         status: "timeout",
-        executable: command.executable,
-        command: command.command,
-        argumentsPrefix: command.argsPrefix,
-        cliMode: command.mode,
-        version,
+        executable: backend.command.executable,
+        command: backend.command.command,
+        argumentsPrefix: backend.command.argsPrefix,
+        cliMode: backend.command.mode,
+        version: backend.version,
         gppExecutable: gpp.executable,
         durationMs: Date.now() - started,
         diagnostics,
@@ -152,11 +159,11 @@ export class StrucppBackend {
     const status = classify(result.exitCode, result.stdout, result.stderr, tests);
     return {
       status,
-      executable: command.executable,
-      command: command.command,
-      argumentsPrefix: command.argsPrefix,
-      cliMode: command.mode,
-      version,
+      executable: backend.command.executable,
+      command: backend.command.command,
+      argumentsPrefix: backend.command.argsPrefix,
+      cliMode: backend.command.mode,
+      version: backend.version,
       gppExecutable: gpp.executable,
       durationMs: Date.now() - started,
       diagnostics,
@@ -166,7 +173,7 @@ export class StrucppBackend {
   }
 }
 
-function validateTestedVersion(version: string | undefined, diagnostics: Diagnostic[]): boolean {
+function validateTestedVersion(version: string | undefined, diagnostics: Diagnostic[]): version is string {
   if (!version) {
     diagnostics.push(
       diagnostic("error", "STRUCPP_VERSION_UNVERIFIED", `STruC++ ${testedVersion} is required, but the backend version could not be verified.`)
@@ -185,7 +192,48 @@ function validateTestedVersion(version: string | undefined, diagnostics: Diagnos
   return false;
 }
 
-async function resolveStrucpp(explicitPath: string | undefined, diagnostics: Diagnostic[]): Promise<ResolvedCommand | undefined> {
+async function resolveCompatibleStrucpp(diagnostics: Diagnostic[]): Promise<ResolvedBackend | undefined> {
+  const explicitPath = process.env.STRUCPP_PATH?.trim();
+  if (explicitPath) {
+    const overrideDiagnostics: Diagnostic[] = [];
+    const override = await resolveStrucppPath(explicitPath, overrideDiagnostics);
+    if (override) {
+      const version = await runVersion(override, overrideDiagnostics);
+      const detected = version && /\b\d+\.\d+\.\d+\b/.exec(version)?.[0];
+      if (detected === testedVersion) {
+        diagnostics.push(...overrideDiagnostics);
+        return { command: override, version: version! };
+      }
+      diagnostics.push(
+        diagnostic(
+          "warning",
+          "STRUCPP_OVERRIDE_VERSION_MISMATCH",
+          `Configured STruC++ '${explicitPath}' reports '${version ?? "unknown"}', not ${testedVersion}; falling back to the bundled runtime.`,
+          { blocking: false }
+        )
+      );
+    } else {
+      diagnostics.push(...overrideDiagnostics.map(item => ({ ...item, severity: "warning" as const, blocking: false })));
+    }
+  }
+
+  const bundledPath = resolvePackFile(bundledStrucppRelativePath);
+  if (bundledPath && (await fileExists(bundledPath))) {
+    const command = nativeCommand(bundledPath, dirname(bundledPath));
+    const version = await runVersion(command, diagnostics);
+    if (validateTestedVersion(version, diagnostics)) return { command, version };
+    return undefined;
+  }
+
+  if (!explicitPath) {
+    diagnostics.push(diagnostic("error", "STRUCPP_NOT_FOUND", "Bundled STruC++ 0.5.12 is missing. Run TcGen installer Repair."));
+  } else {
+    diagnostics.push(diagnostic("error", "STRUCPP_BUNDLED_FALLBACK_MISSING", "The configured STruC++ override is incompatible and the bundled runtime is missing. Run TcGen installer Repair."));
+  }
+  return undefined;
+}
+
+async function resolveStrucppPath(explicitPath: string, diagnostics: Diagnostic[]): Promise<ResolvedCommand | undefined> {
   if (explicitPath?.trim()) {
     const resolved = resolve(explicitPath.trim());
     const resolvedStat = await tryStat(resolved);
@@ -208,8 +256,7 @@ async function resolveStrucpp(explicitPath: string | undefined, diagnostics: Dia
     return undefined;
   }
 
-  const executable = await locateExecutable("strucpp");
-  return executable ? nativeCommand(executable, dirname(executable)) : undefined;
+  return undefined;
 }
 
 async function resolveGpp(forRun: boolean): Promise<ResolvedGpp> {
@@ -217,28 +264,134 @@ async function resolveGpp(forRun: boolean): Promise<ResolvedGpp> {
   if (explicit) {
     const resolved = resolve(explicit);
     if (await fileExists(resolved)) return { available: true, executable: resolved, diagnostics: [] };
+    const bundled = resolvePackFile(bundledGppRelativePath);
+    if (bundled && (await fileExists(bundled))) {
+      return {
+        available: true,
+        executable: bundled,
+        diagnostics: [diagnostic("warning", "STRUCPP_GPP_PATH_INVALID", `Configured compiler '${resolved}' does not exist; using the bundled compiler.`, { blocking: false })]
+      };
+    }
     return {
       available: false,
       executable: resolved,
-      diagnostics: [diagnostic(forRun ? "error" : "warning", "STRUCPP_GPP_PATH_INVALID", `STRUCPP_GPP_PATH '${resolved}' does not exist.`, { blocking: forRun })]
+      diagnostics: [diagnostic(forRun ? "error" : "warning", "STRUCPP_GPP_PATH_INVALID", `Configured compiler '${resolved}' does not exist and the bundled compiler is missing. Run TcGen installer Repair.`, { blocking: forRun })]
     };
   }
 
-  const pathGpp = await locateExecutable("g++");
-  if (pathGpp) return { available: true, executable: pathGpp, diagnostics: [] };
+  const bundled = resolvePackFile(bundledGppRelativePath);
+  if (bundled && (await fileExists(bundled))) return { available: true, executable: bundled, diagnostics: [] };
 
-  if (await fileExists(defaultMsys2Gpp)) {
-    return { available: true, executable: defaultMsys2Gpp, diagnostics: [] };
+  // Source-checkout development remains convenient; packaged runtimes never consult global PATH.
+  if (!packRoot()) {
+    const developmentGpp = await locateExecutable("g++");
+    if (developmentGpp) return { available: true, executable: developmentGpp, diagnostics: [] };
+    if (await fileExists(developmentMsys2Gpp)) return { available: true, executable: developmentMsys2Gpp, diagnostics: [] };
   }
 
   return {
     available: false,
     diagnostics: [
-      diagnostic(forRun ? "error" : "warning", "STRUCPP_GPP_NOT_FOUND", "g++ was not found on PATH, STRUCPP_GPP_PATH, or C:\\msys64\\ucrt64\\bin\\g++.exe.", {
+      diagnostic(forRun ? "error" : "warning", "STRUCPP_GPP_NOT_FOUND", "The bundled C++ compiler is missing. Run TcGen installer Repair, or configure an advanced compiler override.", {
         blocking: forRun
       })
     ]
   };
+}
+
+async function resolveCompatibleGpp(forRun: boolean): Promise<ResolvedGpp> {
+  const selected = await resolveGpp(forRun);
+  if (!selected.available || !selected.executable) return selected;
+
+  const validationDiagnostics: Diagnostic[] = [];
+  if (await verifyCpp17Compiler(selected.executable, validationDiagnostics)) return selected;
+
+  const explicit = process.env.STRUCPP_GPP_PATH?.trim();
+  const bundled = resolvePackFile(bundledGppRelativePath);
+  if (explicit && bundled && (await fileExists(bundled)) && !samePath(selected.executable, bundled)) {
+    const bundledDiagnostics: Diagnostic[] = [];
+    if (await verifyCpp17Compiler(bundled, bundledDiagnostics)) {
+      return {
+        available: true,
+        executable: bundled,
+        diagnostics: [
+          ...selected.diagnostics,
+          ...validationDiagnostics.map(item => ({ ...item, severity: "warning" as const, blocking: false })),
+          diagnostic("warning", "STRUCPP_GPP_OVERRIDE_INCOMPATIBLE", `Configured compiler '${selected.executable}' failed the C++17 self-test; using the bundled compiler.`, { blocking: false })
+        ]
+      };
+    }
+    validationDiagnostics.push(...bundledDiagnostics);
+  }
+
+  return { available: false, executable: selected.executable, diagnostics: [...selected.diagnostics, ...validationDiagnostics] };
+}
+
+function packRoot(): string | undefined {
+  const configured = process.env.TCGEN_ST_TEST_PACK_DIR?.trim();
+  if (configured) return resolve(configured);
+  return undefined;
+}
+
+function resolvePackFile(relativePath: string): string | undefined {
+  const root = packRoot();
+  return root ? join(root, relativePath) : undefined;
+}
+
+async function verifyRuntimeManifest(diagnostics: Diagnostic[]): Promise<boolean> {
+  const root = packRoot();
+  if (!root) return true;
+  const manifestPath = join(root, "runtime-manifest.json");
+  try {
+    const manifestText = (await readFile(manifestPath, "utf8")).replace(/^\uFEFF/, "");
+    const manifest = JSON.parse(manifestText) as {
+      files?: Array<{ path?: string; sha256?: string }>;
+    };
+    const criticalPaths = new Set([
+      "runtime/tcgen-st-test-mcp.exe",
+      "backend/strucpp-win.exe",
+      "toolchain/mingw64/bin/g++.exe"
+    ]);
+    for (const entry of manifest.files ?? []) {
+      const normalized = (entry.path ?? "").replace(/\\/g, "/");
+      if (!criticalPaths.has(normalized)) continue;
+      const fullPath = join(root, ...normalized.split("/"));
+      const actual = createHash("sha256").update(await readFile(fullPath)).digest("hex");
+      if (actual.toLowerCase() !== (entry.sha256 ?? "").toLowerCase()) {
+        diagnostics.push(diagnostic("error", "RUNTIME_INTEGRITY_FAILED", `Virtual Tests runtime integrity failed for '${normalized}'. Run TcGen installer Repair.`));
+        return false;
+      }
+      criticalPaths.delete(normalized);
+    }
+    if (criticalPaths.size > 0) throw new Error(`manifest is missing ${[...criticalPaths].join(", ")}`);
+    return true;
+  } catch (error) {
+    diagnostics.push(diagnostic("error", "RUNTIME_MANIFEST_INVALID", `Virtual Tests runtime manifest is invalid: ${error instanceof Error ? error.message : String(error)}. Run TcGen installer Repair.`));
+    return false;
+  }
+}
+
+async function verifyCpp17Compiler(executable: string, diagnostics: Diagnostic[]): Promise<boolean> {
+  const directory = await mkdtemp(join(tmpdir(), "tcgen-cpp17-check-"));
+  const source = join(directory, "self-test.cpp");
+  const output = join(directory, process.platform === "win32" ? "self-test.exe" : "self-test");
+  try {
+    await writeFile(source, "#include <iostream>\nint main(){ if constexpr (true) { std::cout << \"tcgen-cpp17-ok\"; } }\n", "utf8");
+    const compiler = nativeCommand(executable, directory);
+    const compile = await spawnWithTimeout(compiler, ["-std=c++17", source, "-o", output], 15_000, executable);
+    if (compile.exitCode !== 0) {
+      diagnostics.push(diagnostic("error", "CPP17_COMPILE_FAILED", `The configured C++ compiler failed the C++17 self-test: ${compile.stderr.trim() || "unknown compiler error"}. Run TcGen installer Repair.`));
+      return false;
+    }
+    const run = await spawnWithTimeout(nativeCommand(output, directory), [], 5_000, executable);
+    if (run.exitCode !== 0 || !run.stdout.includes("tcgen-cpp17-ok")) {
+      diagnostics.push(diagnostic("error", "CPP17_EXECUTION_FAILED", "The compiled C++17 self-test did not run successfully. Run TcGen installer Repair."));
+      return false;
+    }
+    return true;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 async function resolveNodeCommand(
@@ -391,14 +544,12 @@ function killProcessTree(pid: number | undefined): void {
 
 function allowedEnv(gppExecutable?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
-  for (const key of ["PATH", "Path", "TEMP", "TMP", "HOME", "USERPROFILE", "SYSTEMROOT", "SystemRoot"]) {
+  for (const key of ["TEMP", "TMP", "HOME", "USERPROFILE", "SYSTEMROOT", "SystemRoot"]) {
     if (process.env[key]) env[key] = process.env[key];
   }
-  if (gppExecutable) {
-    const key = process.platform === "win32" ? "Path" : "PATH";
-    const current = env[key] ?? env.PATH ?? env.Path ?? "";
-    env[key] = `${dirname(gppExecutable)}${delimiter}${current}`;
-  }
+  const pathKey = process.platform === "win32" ? "Path" : "PATH";
+  const currentPath = process.env.PATH ?? process.env.Path ?? "";
+  env[pathKey] = gppExecutable ? `${dirname(gppExecutable)}${delimiter}${currentPath}` : currentPath;
   return env;
 }
 

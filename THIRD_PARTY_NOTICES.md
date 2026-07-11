@@ -2,15 +2,32 @@
 
 ## STruC++
 
-This server invokes STruC++ as an external executable. STruC++ is published by
+The offline product pack includes STruC++ as a separate executable. STruC++ is published by
 Autonomy / OpenPLC Project under GPL-3.0-or-later:
 
 https://github.com/Autonomy-Logic/STruCpp
 
-The v0.2 compatibility target is STruC++ 0.5.12. The local Windows validation
+The v0.3 compatibility target is STruC++ 0.5.12. The Windows runtime
 slice is pinned to the AgileAutomationTechnologies `development` branch at
 commit `0a398a643fad44905d2b786f4229e152cef531bd`, including the required
 Windows/compiler-launch fixes.
+
+## WinLibs GCC and MinGW-w64 toolchain
+
+The Windows product pack includes the WinLibs Win64 standalone build of GCC
+16.1.0 and MinGW-w64 14.0.0 (UCRT release 3, POSIX threads, SEH, without LLVM).
+The pinned binary archive, its checksum, and upstream source locations are
+recorded in `runtime-manifest.json`.
+
+- WinLibs distribution and build sources: https://winlibs.com/ and https://github.com/brechtsanders/winlibs_mingw
+- GCC sources and GPL licensing: https://gcc.gnu.org/ and https://gcc.gnu.org/onlinedocs/libstdc++/manual/license.html
+- GNU Binutils sources and GPL licensing: https://sourceware.org/binutils/
+- MinGW-w64 sources and licensing: https://www.mingw-w64.org/ and https://github.com/mingw-w64/mingw-w64
+
+Release publication requires review of the corresponding-source, bundled
+license-text, and runtime-library-exception obligations for the exact
+manifest-pinned archive. The manifest and links above preserve the precise
+source/version provenance needed for that review.
 
 ## Ajv
 
@@ -57,7 +74,7 @@ Vitest is used for the test suite.
 
 ## Node.js Runtime
 
-This package runs on Node.js 22 or later.
+The standalone MCP and STruC++ executables embed Node.js 22.
 
 - Project: https://github.com/nodejs/node
 - License: MIT

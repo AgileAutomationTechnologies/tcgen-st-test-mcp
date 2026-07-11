@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -11,6 +11,10 @@ if (process.platform !== "win32") {
 const executable = resolve("dist", "tcgen-st-test-mcp.exe");
 const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
 const isolatedWorkingDirectory = mkdtempSync(join(tmpdir(), "tcgen-st-test-exe-"));
+const gppExecutable = process.env.STRUCPP_GPP_PATH || "C:\\msys64\\ucrt64\\bin\\g++.exe";
+if (!existsSync(gppExecutable)) {
+  throw new Error("The standalone executable smoke test requires STRUCPP_GPP_PATH or C:\\msys64\\ucrt64\\bin\\g++.exe.");
+}
 const fakeStrucppCli = join(isolatedWorkingDirectory, "fake-strucpp.mjs");
 writeFileSync(
   fakeStrucppCli,
@@ -35,7 +39,7 @@ try {
   const messages = invokeExecutable({
     ...process.env,
     STRUCPP_PATH: fakeStrucppCli,
-    STRUCPP_GPP_PATH: process.execPath,
+    STRUCPP_GPP_PATH: gppExecutable,
     TCGEN_ST_NODE_PATH: process.execPath
   });
   const serverInfo = messages.find(message => message.id === 1)?.result?.serverInfo;
@@ -57,13 +61,14 @@ try {
     PATH: "",
     Path: "",
     STRUCPP_PATH: fakeStrucppCli,
-    STRUCPP_GPP_PATH: process.execPath,
+    STRUCPP_GPP_PATH: gppExecutable,
     TCGEN_ST_NODE_PATH: ""
   });
   const missingNodeCheck = missingNodeMessages.find(message => message.id === 3)?.result?.structuredContent;
   if (
     missingNodeCheck?.available !== false ||
-    !missingNodeCheck?.diagnostics?.some(diagnostic => diagnostic.code === "STRUCPP_NODE_RUNTIME_NOT_FOUND" && diagnostic.blocking)
+    !missingNodeCheck?.diagnostics?.some(diagnostic => diagnostic.code === "STRUCPP_NODE_RUNTIME_NOT_FOUND") ||
+    !missingNodeCheck?.diagnostics?.some(diagnostic => diagnostic.code === "STRUCPP_BUNDLED_FALLBACK_MISSING" && diagnostic.blocking)
   ) {
     throw new Error(`Packaged JavaScript backend did not fail closed without external Node: ${JSON.stringify(missingNodeCheck)}`);
   }

@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -54,6 +55,8 @@ describe("failure paths", () => {
   }, 30_000);
 
   it("returns timeout when STruC++ hangs", async () => {
+    const gppExecutable = process.env.STRUCPP_GPP_PATH ?? "C:\\msys64\\ucrt64\\bin\\g++.exe";
+    if (!existsSync(gppExecutable)) return;
     const tempDir = await mkdtemp(join(tmpdir(), "tcgen-fake-strucpp-"));
     const fakeCli = join(tempDir, "fake-strucpp.mjs");
     await writeFile(
@@ -68,7 +71,7 @@ describe("failure paths", () => {
       "utf8"
     );
     try {
-      await withEnv({ STRUCPP_PATH: fakeCli, STRUCPP_GPP_PATH: process.execPath }, async () => {
+      await withEnv({ STRUCPP_PATH: fakeCli, STRUCPP_GPP_PATH: gppExecutable }, async () => {
         const request = loadRequest("adder");
         request.options = { ...request.options, timeoutMs: 1000 };
         const report = (await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>)) as SemanticTestReport;

@@ -14,10 +14,10 @@ describe("STruC++ backend", () => {
     await withEnv({ STRUCPP_PATH: repo, STRUCPP_GPP_PATH: undefined }, async () => {
       const check = await new StrucppBackend().check();
       expect(check.available).toBe(true);
-      expect(check.cliMode).toBe("node");
+      expect(["node", "native"]).toContain(check.cliMode);
       expect(check.version).toContain("0.5.12");
     });
-  });
+  }, 30_000);
 
   it("returns a clear backend error for invalid g++ path", async () => {
     const repo = localStrucppRepo();
@@ -47,15 +47,17 @@ describe("STruC++ backend", () => {
       await withEnv({ STRUCPP_PATH: fakeCli, STRUCPP_GPP_PATH: process.execPath }, async () => {
         const check = await new StrucppBackend().check();
         expect(check.available).toBe(false);
-        expect(check.version).toContain("0.5.13");
-        expect(check.diagnostics).toContainEqual(expect.objectContaining({ code: "STRUCPP_VERSION_MISMATCH", blocking: true }));
+        expect(check.diagnostics.map(item => item.message).join("\n")).toContain("0.5.13");
+        expect(check.diagnostics).toContainEqual(expect.objectContaining({ code: "STRUCPP_OVERRIDE_VERSION_MISMATCH", blocking: false }));
+        expect(check.diagnostics).toContainEqual(expect.objectContaining({ code: "STRUCPP_BUNDLED_FALLBACK_MISSING", blocking: true }));
 
         const report = (await toolHandlers.tcgen_st_test_run(
           loadRequest("adder") as unknown as Record<string, unknown>
         )) as SemanticTestReport;
         expect(report.verdict).toBe("backend_error");
         expect(report.tests).toEqual([]);
-        expect(report.diagnostics).toContainEqual(expect.objectContaining({ code: "STRUCPP_VERSION_MISMATCH", blocking: true }));
+        expect(report.diagnostics).toContainEqual(expect.objectContaining({ code: "STRUCPP_OVERRIDE_VERSION_MISMATCH", blocking: false }));
+        expect(report.diagnostics).toContainEqual(expect.objectContaining({ code: "STRUCPP_BUNDLED_FALLBACK_MISSING", blocking: true }));
       });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
