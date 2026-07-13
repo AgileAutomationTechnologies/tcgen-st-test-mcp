@@ -160,6 +160,7 @@ async function unavailableBackendRun(request: Record<string, unknown>): Promise<
   return withEnv(
     {
       STRUCPP_PATH: resolve("missing-v2-contract-strucpp.exe"),
+      STRUCPP_GPP_PATH: resolve("missing-v2-contract-g++.exe"),
       TCGEN_ST_TEST_PACK_DIR: undefined
     },
     async () => toolHandlers.tcgen_st_test_run(request) as Promise<SemanticTestReport>
