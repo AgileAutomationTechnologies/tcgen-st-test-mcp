@@ -7,13 +7,22 @@ export interface GeneratedTestFile {
   content: string;
   diagnostics: Diagnostic[];
   hash: string;
+  generatedTestNames: string[];
+  coveredExecutableObjects: string[];
 }
 
 export class StrucppTestGenerator {
   generate(spec: TcGenTestSpec): GeneratedTestFile {
     const diagnostics = [...validateTcGenTestSpec(spec), ...validateSpec(spec)];
     if (diagnostics.some(item => item.blocking)) {
-      return { path: "semantic_tests.st", content: "", diagnostics, hash: "" };
+      return {
+        path: "semantic_tests.st",
+        content: "",
+        diagnostics,
+        hash: "",
+        generatedTestNames: [],
+        coveredExecutableObjects: []
+      };
     }
 
     const target = spec.target;
@@ -40,7 +49,9 @@ export class StrucppTestGenerator {
       path: "semantic_tests.st",
       content,
       diagnostics,
-      hash: createHash("sha256").update(content).digest("hex")
+      hash: createHash("sha256").update(content).digest("hex"),
+      generatedTestNames: spec.tests.map(test => test.name),
+      coveredExecutableObjects: [spec.target.pouName]
     };
   }
 }

@@ -22,6 +22,17 @@ describe("JSON schemas", () => {
     });
   });
 
+  it("rejects semantically duplicate test names", () => {
+    const request = loadRequest("adder");
+    request.testSpec!.tests.push({
+      name: `  ${request.testSpec!.tests[0].name.toUpperCase()}  `,
+      steps: [{ kind: "call" }]
+    });
+    expect(validateTcGenTestSpec(request.testSpec)).toContainEqual(
+      expect.objectContaining({ code: "TCTEST_DUPLICATE_NAME", blocking: true })
+    );
+  });
+
   it("validates semantic reports when native backend is available", async () => {
     const repo = localStrucppRepo();
     if (!repo) return;
@@ -44,6 +55,28 @@ describe("JSON schemas", () => {
       const report = await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>);
       expect(validateSemanticReport(report)).toEqual([]);
       expect(validatePublishedSchema("schemas/semantic-report.schema.json", report)).toBe(true);
+
+      const duplicateNames = structuredClone(report) as { generatedTestNames: string[] };
+      duplicateNames.generatedTestNames = [report.generatedTestNames[0], report.generatedTestNames[0]];
+      expect(validateSemanticReport(duplicateNames)).toContainEqual(
+        expect.objectContaining({ code: "TCREPORT_SCHEMA_VALIDATION", blocking: true })
+      );
+      expect(validatePublishedSchema("schemas/semantic-report.schema.json", duplicateNames)).toBe(false);
+
+      for (const missingIdentity of ["candidateSha256", "dependencyBundleSha256"] as const) {
+        const missing = structuredClone(report);
+        delete missing.subject[missingIdentity];
+        expect(validateSemanticReport(missing)).toContainEqual(
+          expect.objectContaining({ code: "TCREPORT_SCHEMA_VALIDATION", blocking: true })
+        );
+        expect(validatePublishedSchema("schemas/semantic-report.schema.json", missing)).toBe(false);
+      }
+      const missingTestSource = structuredClone(report);
+      delete missingTestSource.hashes.testSource;
+      expect(validateSemanticReport(missingTestSource)).toContainEqual(
+        expect.objectContaining({ code: "TCREPORT_SCHEMA_VALIDATION", blocking: true })
+      );
+      expect(validatePublishedSchema("schemas/semantic-report.schema.json", missingTestSource)).toBe(false);
     });
   });
 });

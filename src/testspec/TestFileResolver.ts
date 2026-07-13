@@ -17,7 +17,7 @@ export type TestRequest = NormalizeRequest & {
 
 export interface ResolvedTestFile extends GeneratedTestFile {
   sourceFiles: NormalizedFile[];
-  mode?: "testSpec" | "framework";
+  mode: "generated" | "framework";
   discoveredFrameworkTests?: string[];
   selectedFrameworkTests?: string[];
 }
@@ -33,13 +33,13 @@ export function resolveTestFile(request: TestRequest, normalized: NormalizeResul
   const framework = hasFrameworkTest(request);
 
   if (spec && framework) {
-    return errorTestFile("TCTEST_INPUT_CONFLICT", "Use either testSpec or frameworkTest, not both.");
+    return errorTestFile("TCTEST_INPUT_CONFLICT", "Use either testSpec or frameworkTest, not both.", "generated");
   }
   if (!spec && !framework) {
-    return errorTestFile("TCTEST_INPUT_REQUIRED", "testSpec or frameworkTest is required.");
+    return errorTestFile("TCTEST_INPUT_REQUIRED", "testSpec or frameworkTest is required.", "generated");
   }
   if (spec) {
-    return { ...new StrucppTestGenerator().generate(request.testSpec as TcGenTestSpec), sourceFiles: [], mode: "testSpec" };
+    return { ...new StrucppTestGenerator().generate(request.testSpec as TcGenTestSpec), sourceFiles: [], mode: "generated" };
   }
 
   return new FrameworkTestBuilder().generate(normalized, request.frameworkTest);
@@ -53,13 +53,16 @@ function hasFrameworkTest(request: TestRequest): boolean {
   return request.frameworkTest !== undefined && request.frameworkTest !== null;
 }
 
-function errorTestFile(code: string, message: string): ResolvedTestFile {
+function errorTestFile(code: string, message: string, mode: ResolvedTestFile["mode"]): ResolvedTestFile {
   const diagnostics: Diagnostic[] = [diagnostic("error", code, message)];
   return {
     path: "semantic_tests.st",
     content: "",
     diagnostics,
     hash: "",
-    sourceFiles: []
+    sourceFiles: [],
+    mode,
+    generatedTestNames: [],
+    coveredExecutableObjects: []
   };
 }

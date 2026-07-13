@@ -11,7 +11,35 @@ const validators = {
 };
 
 export function validateTcGenTestSpec(value: unknown): Diagnostic[] {
-  return validateWith("TCTEST_SCHEMA_VALIDATION", validators.tcgenTestSpec, value);
+  return [
+    ...validateWith("TCTEST_SCHEMA_VALIDATION", validators.tcgenTestSpec, value),
+    ...validateUniqueTestNames(value)
+  ];
+}
+
+function validateUniqueTestNames(value: unknown): Diagnostic[] {
+  if (!value || typeof value !== "object" || !Array.isArray((value as { tests?: unknown }).tests)) return [];
+  const diagnostics: Diagnostic[] = [];
+  const seen = new Map<string, string>();
+  for (const item of (value as { tests: unknown[] }).tests) {
+    if (!item || typeof item !== "object" || typeof (item as { name?: unknown }).name !== "string") continue;
+    const name = (item as { name: string }).name.trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    const original = seen.get(key);
+    if (original !== undefined) {
+      diagnostics.push(
+        diagnostic(
+          "error",
+          "TCTEST_DUPLICATE_NAME",
+          `Test name '${name}' duplicates '${original}'. Test names must be unique ignoring case and surrounding whitespace.`
+        )
+      );
+    } else {
+      seen.set(key, name);
+    }
+  }
+  return diagnostics;
 }
 
 export function validateSemanticReport(value: unknown): Diagnostic[] {

@@ -22,6 +22,7 @@ export type SemanticVerdict =
   | "compile_error"
   | "backend_error"
   | "timeout";
+export type SemanticTestMode = "generated" | "framework";
 
 export interface SourceSpan {
   path: string;
@@ -36,6 +37,7 @@ export interface Diagnostic {
   blocking: boolean;
   code: string;
   message: string;
+  sourceKind?: "generated_test_harness" | "candidate" | "backend" | "mixed" | "unknown";
   original?: SourceSpan;
   generated?: SourceSpan;
   object?: string;
@@ -159,8 +161,14 @@ export interface BackendCheckResult {
 }
 
 export interface SemanticTestReport {
-  schemaVersion: 1;
-  subject: SemanticTestSubject;
+  schemaVersion: 2;
+  testMode: SemanticTestMode;
+  coveredExecutableObjects: string[];
+  generatedTestNames: string[];
+  subject: SemanticTestSubject & {
+    candidateSha256: string;
+    dependencyBundleSha256: string;
+  };
   verdict: SemanticVerdict;
   backend: {
     name: "strucpp";
@@ -176,6 +184,9 @@ export interface SemanticTestReport {
     skipped: number;
     compileErrors: number;
     runtimeErrors: number;
+    timedOut: number;
+    unsupported: number;
+    total: number;
   };
   tests: Array<{ name: string; status: "passed" | "failed" | "skipped"; message?: string }>;
   diagnostics: Diagnostic[];
@@ -190,7 +201,7 @@ export interface SemanticTestReport {
   hashes: {
     request: string;
     normalizedSource?: string;
-    testSource?: string;
+    testSource: string;
   };
   qualification: string;
 }

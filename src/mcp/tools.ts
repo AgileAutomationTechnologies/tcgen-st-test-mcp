@@ -2,6 +2,11 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { StrucppBackend } from "../backends/StrucppBackend.js";
 import { NormalizeRequest, SemanticTestReport, SemanticTestSubject, diagnostic } from "../domain/models.js";
+import {
+  sanitizeCompilerDiagnostics,
+  sanitizeCompilerOutput,
+  structuredCompilerOutputDiagnostics
+} from "../domain/reportSanitizer.js";
 import { TcGenToStrucppNormalizer } from "../normalizer/TcGenToStrucppNormalizer.js";
 import { normalizerOptionsForTestRequest, resolveTestFile, TestRequest } from "../testspec/TestFileResolver.js";
 import { WorkspaceManager } from "../workspace/WorkspaceManager.js";
@@ -45,10 +50,15 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const normalized = new TcGenToStrucppNormalizer().normalize(request, normalizerOptionsForTestRequest(request));
     const generated = resolveTestFile(request, normalized);
     const normalizedForReport = withRuntimeSourceFiles(normalized, generated.sourceFiles);
-    const hashes: SemanticTestReport["hashes"] = { ...normalizedForReport.hashes };
-    if (generated.hash) hashes.testSource = generated.hash;
+    const hashes: SemanticTestReport["hashes"] = {
+      ...normalizedForReport.hashes,
+      testSource: generated.hash || sha256(generated.content)
+    };
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      testMode: generated.mode,
+      coveredExecutableObjects: [...generated.coveredExecutableObjects],
+      generatedTestNames: [...generated.generatedTestNames],
       subject: subjectForTest(normalizedForReport.subject, generated),
       normalization: normalizedForReport.normalization,
       normalizedFiles: request.options?.includeNormalizedSources === false ? [] : normalizedForReport.normalizedFiles,
@@ -84,7 +94,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
         verdict: normalizedForRun.normalization.status === "blocked" ? "unsupported" : "backend_error",
         normalized: normalizedForRun,
         testFile,
-        diagnostics: preflightDiagnostics
+        diagnostics: preflightDiagnostics,
+        includeArtifacts: request.options?.includeArtifacts === true
       });
     }
 
@@ -105,6 +116,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
           diagnostic("error", "SANDBOX_WORKSPACE_ERROR", error instanceof Error ? error.message : String(error))
         ],
         includeArtifacts: request.options?.includeArtifacts === true,
+        sanitizationWorkspace: workspace,
         workspace: keepWorkspace ? workspace : undefined
       });
     } finally {
@@ -118,6 +130,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
       diagnostics: [...preflightDiagnostics, ...backendResult.diagnostics],
       backendResult,
       includeArtifacts: request.options?.includeArtifacts === true,
+      sanitizationWorkspace: workspace,
       workspace: keepWorkspace ? workspace : undefined
     });
   }
@@ -153,28 +166,77 @@ function buildReport(input: {
     content: string;
     diagnostics: unknown[];
     hash: string;
-    mode?: "testSpec" | "framework";
+    mode: "generated" | "framework";
+    generatedTestNames: string[];
+    coveredExecutableObjects: string[];
     discoveredFrameworkTests?: string[];
     selectedFrameworkTests?: string[];
   };
   diagnostics: SemanticTestReport["diagnostics"];
   backendResult?: { executable?: string; version?: string; cliMode?: "native" | "node"; gppExecutable?: string; stdout: string; stderr: string; tests: SemanticTestReport["tests"] };
   includeArtifacts?: boolean;
+  sanitizationWorkspace?: string;
   workspace?: string;
 }): SemanticTestReport {
-  const tests = input.backendResult?.tests ?? [];
-  const verdict = input.normalized.normalization.status === "partial" && input.verdict === "passed" ? "partial" : input.verdict;
+  const tests = (input.backendResult?.tests ?? []).map(test => ({
+    ...test,
+    name: sanitizeCompilerOutput(test.name, input.sanitizationWorkspace),
+    ...(test.message === undefined ? {} : { message: sanitizeCompilerOutput(test.message, input.sanitizationWorkspace) })
+  }));
+  const executedTests = tests.filter(test => test.status === "passed" || test.status === "failed").length;
+  const generatedResultMismatch = input.testFile.mode === "generated"
+    ? generatedTestResultMismatch(input.testFile.generatedTestNames, tests)
+    : undefined;
+  const completedBackendResultIsIncomplete =
+    (input.verdict === "passed" || input.verdict === "failed")
+    && (executedTests === 0 || generatedResultMismatch !== undefined);
+  const backendVerdict = completedBackendResultIsIncomplete ? "backend_error" : input.verdict;
+  const verdict = input.normalized.normalization.status === "partial" && backendVerdict === "passed" ? "partial" : backendVerdict;
   const backend: SemanticTestReport["backend"] = { name: "strucpp" };
   if (input.backendResult?.executable) backend.executable = input.backendResult.executable;
   if (input.backendResult?.version) backend.version = input.backendResult.version;
   if (input.backendResult?.cliMode) backend.cliMode = input.backendResult.cliMode;
   if (input.backendResult?.gppExecutable) backend.gppExecutable = input.backendResult.gppExecutable;
-  const hashes: SemanticTestReport["hashes"] = { ...input.normalized.hashes };
-  const testSource = input.testFile.hash || (input.testFile.content ? sha256(input.testFile.content) : undefined);
-  if (testSource) hashes.testSource = testSource;
+  const testSource = input.testFile.hash || sha256(input.testFile.content);
+  const hashes: SemanticTestReport["hashes"] = {
+    ...input.normalized.hashes,
+    testSource
+  };
+
+  const sanitizedDiagnostics = sanitizeCompilerDiagnostics(input.diagnostics, input.sanitizationWorkspace);
+  if (input.verdict === "passed" && executedTests === 0 && !sanitizedDiagnostics.some(item => item.code === "STRUCPP_NO_TEST_RESULTS")) {
+    sanitizedDiagnostics.push(
+      diagnostic(
+        "error",
+        "STRUCPP_NO_TEST_RESULTS",
+        "The semantic backend returned a passing status without any executed tests; the result is not trusted."
+      )
+    );
+  }
+  if (
+    (input.verdict === "passed" || input.verdict === "failed")
+    && generatedResultMismatch
+    && !sanitizedDiagnostics.some(item => item.code === "STRUCPP_INCOMPLETE_TEST_RESULTS")
+  ) {
+    sanitizedDiagnostics.push(
+      diagnostic(
+        "error",
+        "STRUCPP_INCOMPLETE_TEST_RESULTS",
+        generatedResultMismatch
+      )
+    );
+  }
+  if (input.backendResult) {
+    sanitizedDiagnostics.push(
+      ...structuredCompilerOutputDiagnostics(verdict, input.backendResult, input.sanitizationWorkspace)
+    );
+  }
 
   const report: SemanticTestReport = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    testMode: input.testFile.mode,
+    coveredExecutableObjects: [...input.testFile.coveredExecutableObjects],
+    generatedTestNames: [...input.testFile.generatedTestNames],
     subject: subjectForTest(input.normalized.subject, input.testFile),
     verdict,
     backend,
@@ -184,10 +246,17 @@ function buildReport(input: {
       failed: tests.filter(test => test.status === "failed").length,
       skipped: tests.filter(test => test.status === "skipped").length,
       compileErrors: verdict === "compile_error" ? 1 : 0,
-      runtimeErrors: verdict === "backend_error" ? 1 : 0
+      runtimeErrors: verdict === "backend_error" ? 1 : 0,
+      timedOut: verdict === "timeout" ? 1 : 0,
+      unsupported: verdict === "unsupported" ? 1 : 0,
+      total: Math.max(
+        tests.length,
+        input.testFile.generatedTestNames.length,
+        ["compile_error", "backend_error", "timeout", "unsupported"].includes(verdict) ? 1 : 0
+      )
     },
     tests,
-    diagnostics: input.diagnostics,
+    diagnostics: sanitizedDiagnostics,
     hashes,
     qualification:
       "Offline semantic test passed for the normalized STruC++ model. Final TwinCAT compilation or target validation may still be required for vendor libraries, task behavior, I/O, ADS, motion, lifecycle methods, and runtime-specific behavior."
@@ -198,12 +267,55 @@ function buildReport(input: {
       testFile: { path: input.testFile.path, content: input.testFile.content },
       generatedTestFile: { path: input.testFile.path, content: input.testFile.content }
     };
-    if (input.backendResult?.stdout !== undefined) artifacts.stdout = input.backendResult.stdout;
-    if (input.backendResult?.stderr !== undefined) artifacts.stderr = input.backendResult.stderr;
+    if (input.backendResult?.stdout !== undefined) artifacts.stdout = sanitizeCompilerOutput(input.backendResult.stdout, input.sanitizationWorkspace);
+    if (input.backendResult?.stderr !== undefined) artifacts.stderr = sanitizeCompilerOutput(input.backendResult.stderr, input.sanitizationWorkspace);
     if (input.workspace) artifacts.workspace = input.workspace;
     report.artifacts = artifacts;
   }
-  return withReportValidation(report, validateSemanticReport);
+  return withSemanticReportValidation(report);
+}
+
+export function generatedTestResultMismatch(
+  generatedTestNames: readonly string[],
+  tests: readonly SemanticTestReport["tests"][number][]
+): string | undefined {
+  const expected = [...generatedTestNames];
+  const actual = tests.map(test => test.name);
+  const expectedCounts = nameCounts(expected);
+  const actualCounts = nameCounts(actual);
+  const missingOrDuplicated = expected.filter(name => actualCounts.get(name) !== 1);
+  const unexpected = actual.filter(name => !expectedCounts.has(name) || expectedCounts.get(name) !== 1);
+  const nonExecuted = tests
+    .filter(test => test.status !== "passed" && test.status !== "failed")
+    .map(test => test.name);
+  if (missingOrDuplicated.length === 0 && unexpected.length === 0 && nonExecuted.length === 0) {
+    return undefined;
+  }
+
+  const details = [
+    missingOrDuplicated.length > 0
+      ? `missing or duplicated generated tests: ${uniqueNames(missingOrDuplicated).join(", ")}`
+      : "",
+    unexpected.length > 0
+      ? `unexpected or duplicated backend tests: ${uniqueNames(unexpected).join(", ")}`
+      : "",
+    nonExecuted.length > 0
+      ? `tests not executed: ${uniqueNames(nonExecuted).join(", ")}`
+      : ""
+  ].filter(Boolean);
+  return "The semantic backend did not return exactly one executed result for every generated test ("
+    + details.join("; ")
+    + ").";
+}
+
+function nameCounts(values: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  return counts;
+}
+
+function uniqueNames(values: readonly string[]): string[] {
+  return [...new Set(values)];
 }
 
 function withReportValidation<T extends { diagnostics: SemanticTestReport["diagnostics"] }>(
@@ -215,6 +327,20 @@ function withReportValidation<T extends { diagnostics: SemanticTestReport["diagn
   return { ...report, diagnostics: [...report.diagnostics, ...diagnostics] };
 }
 
+function withSemanticReportValidation(report: SemanticTestReport): SemanticTestReport {
+  const diagnostics = validateSemanticReport(report);
+  if (diagnostics.length === 0) return report;
+  return {
+    ...report,
+    verdict: "backend_error",
+    summary: {
+      ...report.summary,
+      runtimeErrors: Math.max(1, report.summary.runtimeErrors)
+    },
+    diagnostics: [...report.diagnostics, ...diagnostics]
+  };
+}
+
 function tool(name: string, description: string, inputSchema: Record<string, unknown>): Record<string, unknown> {
   return {
     name,
@@ -223,6 +349,7 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
     metadata: {
       tcgen: {
         contractVersion: 1,
+        ...(name === "tcgen_st_test_generate" || name === "tcgen_st_test_run" ? { semanticReportSchemaVersion: 2 } : {}),
         origin: "pack",
         serverId: "tcgen_st_test",
         childToolName: name,
@@ -234,6 +361,9 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
         modelContentPath: "",
         evidencePaths: [
           "structuredContent.verdict",
+          "structuredContent.testMode",
+          "structuredContent.coveredExecutableObjects",
+          "structuredContent.generatedTestNames",
           "structuredContent.subject.candidateSha256",
           "structuredContent.subject.dependencyBundleSha256",
           "structuredContent.subject.discoveredFrameworkTests",
@@ -341,14 +471,21 @@ function withRuntimeSourceFiles(
 function subjectForTest(
   subject: SemanticTestSubject,
   testFile: {
-    mode?: "testSpec" | "framework";
+    mode?: "generated" | "framework";
     discoveredFrameworkTests?: string[];
     selectedFrameworkTests?: string[];
   }
-): SemanticTestSubject {
-  if (testFile.mode !== "framework") return { ...subject };
-  return {
+): SemanticTestReport["subject"] {
+  const reportSubject: SemanticTestReport["subject"] = {
     ...subject,
+    // Invalid/ambiguous requests remain blocking reports, but schema-v2 never
+    // publishes an identity-shaped object with fields silently omitted.
+    candidateSha256: subject.candidateSha256 || sha256(""),
+    dependencyBundleSha256: subject.dependencyBundleSha256 || sha256("[]")
+  };
+  if (testFile.mode !== "framework") return reportSubject;
+  return {
+    ...reportSubject,
     discoveredFrameworkTests: [...(testFile.discoveredFrameworkTests ?? [])],
     selectedFrameworkTests: [...(testFile.selectedFrameworkTests ?? [])]
   };

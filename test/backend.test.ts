@@ -1,13 +1,122 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { StrucppBackend } from "../src/backends/StrucppBackend.js";
-import { SemanticTestReport } from "../src/domain/models.js";
-import { toolHandlers } from "../src/mcp/tools.js";
+import {
+  StrucppBackend,
+  backendChildEnvironment,
+  classifyBackendRun,
+  verifyRuntimeManifest
+} from "../src/backends/StrucppBackend.js";
+import { Diagnostic, SemanticTestReport } from "../src/domain/models.js";
+import { compilerDiagnosticSourceKind } from "../src/domain/reportSanitizer.js";
+import { generatedTestResultMismatch, toolHandlers } from "../src/mcp/tools.js";
 import { exampleNames, loadRequest, localStrucppRepo, withEnv } from "./helpers.js";
 
 describe("STruC++ backend", () => {
+  it("rejects passing backend output that omits or invents generated tests", () => {
+    expect(
+      generatedTestResultMismatch(
+        ["accepts A", "accepts B"],
+        [{ name: "accepts A", status: "passed" }]
+      )
+    ).toContain("accepts B");
+    expect(
+      generatedTestResultMismatch(
+        ["accepts A"],
+        [
+          { name: "accepts A", status: "passed" },
+          { name: "stale test", status: "passed" }
+        ]
+      )
+    ).toContain("stale test");
+    expect(
+      generatedTestResultMismatch(
+        ["accepts A", "accepts B"],
+        [
+          { name: "accepts A", status: "passed" },
+          { name: "accepts B", status: "passed" }
+        ]
+      )
+    ).toBeUndefined();
+  });
+
+  it("never classifies an exit-0 backend result without parsed tests as passed", () => {
+    expect(classifyBackendRun(0, "Compilation completed.", "", [])).toBe("backend_error");
+    expect(classifyBackendRun(0, "SKIP: unavailable", "", [{ name: "unavailable", status: "skipped" }])).toBe("backend_error");
+    expect(classifyBackendRun(0, "PASS: executes", "", [{ name: "executes", status: "passed" }])).toBe("passed");
+  });
+
+  it("labels generated C++ harness diagnostics separately from candidate diagnostics", () => {
+    expect(compilerDiagnosticSourceKind("compile_error", "<temp>/test_main.cpp:10: error: no member NOT_REAL"))
+      .toBe("generated_test_harness");
+    expect(compilerDiagnosticSourceKind("compile_error", "<temp>/generated.cpp:10: error: invalid production expression"))
+      .toBe("candidate");
+    expect(compilerDiagnosticSourceKind("backend_error", "compiler process failed"))
+      .toBe("backend");
+  });
+
+  it("never copies invocation grants or authorization secrets into backend child environments", async () => {
+    await withEnv(
+      {
+        TCGEN_CHILD_TOOL_GRANT: "one-use-jwt",
+        TCGEN_INVOCATION_GRANT: "another-jwt",
+        AUTHORIZATION: "Bearer secret",
+        NODE_OPTIONS: "--require=untrusted.js"
+      },
+      async () => {
+        const compiler = join(tmpdir(), "tcgen-private", "bin", "g++.exe");
+        const env = backendChildEnvironment(compiler);
+        expect(env.TCGEN_CHILD_TOOL_GRANT).toBeUndefined();
+        expect(env.TCGEN_INVOCATION_GRANT).toBeUndefined();
+        expect(env.AUTHORIZATION).toBeUndefined();
+        expect(env.NODE_OPTIONS).toBeUndefined();
+        expect(env[process.platform === "win32" ? "Path" : "PATH"]).toBe(join(tmpdir(), "tcgen-private", "bin"));
+        expect(Object.keys(env).every(key =>
+          ["TEMP", "TMP", "HOME", "USERPROFILE", "SYSTEMROOT", "SystemRoot", "PATH", "Path"].includes(key)
+        )).toBe(true);
+      }
+    );
+  });
+
+  it("verifies every installed manifest entry and requires the IEC standard FB runtime", async () => {
+    const validPack = await createRuntimeManifestFixture();
+    const corruptPack = await createRuntimeManifestFixture({ corruptPath: "backend/runtime/include/support.hpp" });
+    const missingLibraryPack = await createRuntimeManifestFixture({ omitStandardLibrary: true });
+    try {
+      await withEnv({ TCGEN_ST_TEST_PACK_DIR: validPack }, async () => {
+        const diagnostics: Diagnostic[] = [];
+        expect(await verifyRuntimeManifest(diagnostics)).toBe(true);
+        expect(diagnostics).toEqual([]);
+
+        const supportPath = join(validPack, "backend", "runtime", "include", "support.hpp");
+        await writeFile(supportPath, "corrupt-after-successful-preflight", "utf8");
+        const corruptAfterPreflight: Diagnostic[] = [];
+        expect(await verifyRuntimeManifest(corruptAfterPreflight)).toBe(false);
+        expect(corruptAfterPreflight).toContainEqual(expect.objectContaining({ code: "RUNTIME_INTEGRITY_FAILED" }));
+
+        await writeFile(supportPath, "support", "utf8");
+        const repaired: Diagnostic[] = [];
+        expect(await verifyRuntimeManifest(repaired)).toBe(true);
+        expect(repaired).toEqual([]);
+      });
+      await withEnv({ TCGEN_ST_TEST_PACK_DIR: corruptPack }, async () => {
+        const diagnostics: Diagnostic[] = [];
+        expect(await verifyRuntimeManifest(diagnostics)).toBe(false);
+        expect(diagnostics).toContainEqual(expect.objectContaining({ code: "RUNTIME_INTEGRITY_FAILED" }));
+      });
+      await withEnv({ TCGEN_ST_TEST_PACK_DIR: missingLibraryPack }, async () => {
+        const diagnostics: Diagnostic[] = [];
+        expect(await verifyRuntimeManifest(diagnostics)).toBe(false);
+        expect(diagnostics).toContainEqual(expect.objectContaining({ code: "RUNTIME_MANIFEST_INVALID" }));
+        expect(diagnostics.map(item => item.message).join("\n")).toContain("backend/libs/iec-standard-fb.stlib");
+      });
+    } finally {
+      await Promise.all([validPack, corruptPack, missingLibraryPack].map(path => rm(path, { recursive: true, force: true })));
+    }
+  });
+
   it("resolves the local STruC++ repo when STRUCPP_PATH points at the checkout", async () => {
     const repo = localStrucppRepo();
     if (!repo) return;
@@ -64,6 +173,31 @@ describe("STruC++ backend", () => {
     }
   });
 
+  it("fails semantic preflight when standard runtime support is unavailable and re-probes after repair", async () => {
+    const gppExecutable = process.env.STRUCPP_GPP_PATH ?? "C:\\msys64\\ucrt64\\bin\\g++.exe";
+    const tempDir = await mkdtemp(join(tmpdir(), "tcgen-semantic-preflight-"));
+    const fakeCli = join(tempDir, "fake-strucpp.mjs");
+    try {
+      await writeFile(fakeCli, fakeSemanticRuntimeCli(false), "utf8");
+      await withEnv({ STRUCPP_PATH: fakeCli, STRUCPP_GPP_PATH: gppExecutable }, async () => {
+        const failed = await new StrucppBackend().check();
+        if (failed.diagnostics.some(item => item.code === "STRUCPP_GPP_PATH_INVALID")) return;
+        expect(failed.available).toBe(false);
+        expect(failed.diagnostics).toContainEqual(expect.objectContaining({
+          code: "STRUCPP_SEMANTIC_SELF_TEST_FAILED",
+          sourceKind: "backend"
+        }));
+
+        await writeFile(fakeCli, fakeSemanticRuntimeCli(true), "utf8");
+        const repaired = await new StrucppBackend().check();
+        expect(repaired.available).toBe(true);
+        expect(repaired.version).toBe("0.5.12");
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("can run fixture tests when STruC++ and g++ are available", async () => {
     const repo = localStrucppRepo();
     if (!repo) return;
@@ -76,9 +210,42 @@ describe("STruC++ backend", () => {
       for (const name of exampleNames) {
         const result = (await toolHandlers.tcgen_st_test_run(loadRequest(name) as unknown as Record<string, unknown>)) as SemanticTestReport;
         expect(result.verdict, name).toBe("passed");
+        expect(result.summary, name).toEqual({
+          passed: result.tests.filter(test => test.status === "passed").length,
+          failed: result.tests.filter(test => test.status === "failed").length,
+          skipped: result.tests.filter(test => test.status === "skipped").length,
+          compileErrors: 0,
+          runtimeErrors: 0,
+          timedOut: 0,
+          unsupported: 0,
+          total: result.generatedTestNames.length
+        });
+        expect(result.tests.every(test => result.generatedTestNames.includes(test.name)), name).toBe(true);
       }
     });
   }, 180_000);
+
+  it("reports an actual malformed generated harness as generated_test_harness", async () => {
+    const repo = localStrucppRepo();
+    if (!repo) return;
+    await withEnv({ STRUCPP_PATH: repo }, async () => {
+      const check = await new StrucppBackend().check();
+      if (!check.available || !check.gppAvailable) return;
+      const request = loadRequest("adder");
+      request.testSpec!.tests[0].steps = [
+        { kind: "set", path: "$target.not_real", value: true },
+        { kind: "call", arguments: { A: 2, B: 3 } }
+      ];
+      const result = (await toolHandlers.tcgen_st_test_run(
+        request as unknown as Record<string, unknown>
+      )) as SemanticTestReport;
+      expect(result.verdict).toBe("compile_error");
+      expect(result.diagnostics).toContainEqual(expect.objectContaining({
+        code: "STRUCPP_COMPILE_STDERR",
+        sourceKind: "generated_test_harness"
+      }));
+    });
+  }, 60_000);
 
   it("advances a busy framework test through repeated m_xIsBusy scans", async () => {
     const repo = localStrucppRepo();
@@ -91,7 +258,56 @@ describe("STruC++ backend", () => {
       )) as SemanticTestReport;
       expect(result.verdict).toBe("passed");
       expect(result.summary.passed).toBe(1);
+      expect(result.testMode).toBe("framework");
+      expect(result.coveredExecutableObjects).toEqual(["FB_Test_LimitCounter"]);
+      expect(result.generatedTestNames).toEqual(["framework FB_Test_LimitCounter"]);
       expect(result.subject.selectedFrameworkTests).toEqual(["FB_Test_LimitCounter"]);
     });
   }, 60_000);
 });
+
+async function createRuntimeManifestFixture(
+  options: { corruptPath?: string; omitStandardLibrary?: boolean } = {}
+): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "tcgen-runtime-manifest-"));
+  const files: Record<string, string> = {
+    "runtime/tcgen-st-test-mcp.exe": "mcp",
+    "backend/strucpp-win.exe": "strucpp",
+    "toolchain/mingw64/bin/g++.exe": "compiler",
+    "backend/runtime/include/support.hpp": "support"
+  };
+  if (!options.omitStandardLibrary) files["backend/libs/iec-standard-fb.stlib"] = "standard-library";
+  const entries = [];
+  for (const [path, content] of Object.entries(files)) {
+    const target = join(root, ...path.split("/"));
+    await mkdir(dirnameForTest(target), { recursive: true });
+    await writeFile(target, content, "utf8");
+    entries.push({
+      path,
+      sha256: createHash("sha256").update(content, "utf8").digest("hex"),
+      size: Buffer.byteLength(content)
+    });
+  }
+  await writeFile(join(root, "runtime-manifest.json"), JSON.stringify({ files: entries }), "utf8");
+  if (options.corruptPath) {
+    await writeFile(join(root, ...options.corruptPath.split("/")), "corrupt", "utf8");
+  }
+  return root;
+}
+
+function dirnameForTest(path: string): string {
+  return path.replace(/[\\/][^\\/]*$/, "");
+}
+
+function fakeSemanticRuntimeCli(passes: boolean): string {
+  return [
+    "if (process.argv.includes('--version')) {",
+    "  console.log('STruC++ version 0.5.12');",
+    "  process.exit(0);",
+    "}",
+    passes
+      ? "console.log('PASS: tcgen-runtime-self-test');"
+      : "console.error(\"runtime_self_test.st:9: error: Undefined type 'TON'\");",
+    `process.exit(${passes ? 0 : 1});`
+  ].join("\n");
+}

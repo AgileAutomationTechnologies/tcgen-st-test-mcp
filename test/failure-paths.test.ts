@@ -51,7 +51,48 @@ describe("failure paths", () => {
       const report = (await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>)) as SemanticTestReport;
       expect(report.verdict).toBe("compile_error");
       expect(report.summary.compileErrors).toBe(1);
+      const promoted = report.diagnostics.filter(item => item.code.startsWith("STRUCPP_COMPILE_"));
+      expect(promoted.length).toBeGreaterThan(0);
+      expect(promoted.map(item => item.message).join("\n")).not.toMatch(/[A-Za-z]:[\\/][^\r\n]*tcgen-st-test-/i);
     });
+  }, 30_000);
+
+  it("fails closed when an exit-0 backend reports no executed tests", async () => {
+    const gppExecutable = process.env.STRUCPP_GPP_PATH ?? "C:\\msys64\\ucrt64\\bin\\g++.exe";
+    if (!existsSync(gppExecutable)) return;
+    const tempDir = await mkdtemp(join(tmpdir(), "tcgen-no-tests-"));
+    const fakeCli = join(tempDir, "fake-strucpp.mjs");
+    await writeFile(
+      fakeCli,
+      [
+        "if (process.argv.includes('--version')) {",
+        "  console.log('STruC++ version 0.5.12');",
+        "  process.exit(0);",
+        "}",
+        "console.log('Compilation completed without executing tests.');",
+        "process.exit(0);"
+      ].join("\n"),
+      "utf8"
+    );
+    try {
+      await withEnv({ STRUCPP_PATH: fakeCli, STRUCPP_GPP_PATH: gppExecutable }, async () => {
+        const report = (await toolHandlers.tcgen_st_test_run(
+          loadRequest("adder") as unknown as Record<string, unknown>
+        )) as SemanticTestReport;
+        expect(report.verdict).toBe("backend_error");
+        expect(report.tests).toEqual([]);
+        expect(report.summary.runtimeErrors).toBe(1);
+        expect(report.diagnostics).toContainEqual(expect.objectContaining({ code: "STRUCPP_NO_TEST_RESULTS" }));
+        expect(report.diagnostics).toContainEqual(
+          expect.objectContaining({
+            code: "STRUCPP_RUNTIME_STDOUT",
+            message: expect.stringContaining("Compilation completed without executing tests.")
+          })
+        );
+      });
+    } finally {
+      await rmRetry(tempDir);
+    }
   }, 30_000);
 
   it("returns timeout when STruC++ hangs", async () => {
@@ -76,6 +117,8 @@ describe("failure paths", () => {
         request.options = { ...request.options, timeoutMs: 1000 };
         const report = (await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>)) as SemanticTestReport;
         expect(report.verdict).toBe("timeout");
+        expect(report.summary.timedOut).toBe(1);
+        expect(report.summary.total).toBe(1);
         expect(report.diagnostics.map(item => item.code)).toContain("SANDBOX_TIMEOUT");
       });
     } finally {
@@ -132,6 +175,8 @@ describe("failure paths", () => {
     request.scope = { mode: "entrypoints", entrypoints: ["FB_Test_ProductionMain"] };
     const report = (await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>)) as SemanticTestReport;
     expect(report.verdict).toBe("unsupported");
+    expect(report.summary.unsupported).toBe(1);
+    expect(report.summary.total).toBeGreaterThanOrEqual(1);
     expect(report.diagnostics.map(item => item.code)).toContain("TCSUBJECT_CANDIDATE_SCOPE_EXCLUDED");
     expect(report.normalization.includedObjects).not.toContain("MAIN");
     expect(report.subject.discoveredFrameworkTests).toEqual(["FB_Test_ProductionMain"]);

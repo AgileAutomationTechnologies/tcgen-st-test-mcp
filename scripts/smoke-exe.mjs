@@ -23,7 +23,8 @@ writeFileSync(
     "  console.log('STruC++ version 0.5.12');",
     "  process.exit(0);",
     "}",
-    "process.exit(2);"
+    "console.log('PASS: tcgen-runtime-self-test');",
+    "process.exit(0);"
   ].join("\n"),
   "utf8"
 );

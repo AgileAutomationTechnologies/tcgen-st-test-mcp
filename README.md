@@ -30,6 +30,29 @@ bind that candidate to the result through:
 }
 ```
 
+Semantic generation and run results use report schema v2. The execution
+contract adds explicit coverage and generated-test identity alongside the
+candidate/dependency hashes:
+
+```json
+{
+  "schemaVersion": 2,
+  "testMode": "generated",
+  "coveredExecutableObjects": ["FB_Adder"],
+  "generatedTestNames": ["adds two integers"],
+  "hashes": {
+    "testSource": "..."
+  }
+}
+```
+
+`testMode` is `generated` for JSON `testSpec` requests and `framework` for
+TcGen framework requests. Generated coverage names the declared target POU.
+Framework coverage names only the concrete `FB_Test_*` blocks executed by the
+offline wrappers; it does not infer production-object coverage. The legacy v1
+run contract remains published as
+[`schemas/semantic-report-v1.schema.json`](schemas/semantic-report-v1.schema.json).
+
 The candidate hash covers its exact UTF-8 content. The dependency hash covers
 `JSON.stringify` of the remaining `{path, content}` entries sorted ordinally by
 path and then content, so source-array ordering cannot change the identity.
@@ -70,6 +93,18 @@ authority:
   blocks.
 - `frameworkTest`: TcGen/TwinCAT-style ST tests where the request sources include
   the CUT plus concrete `FB_Test_* EXTENDS FB_TestCaseBase` blocks.
+
+When `options.includeArtifacts` is true, run reports include the generated ST
+in `artifacts.generatedTestFile` even when preflight blocks execution. Compiler
+stdout, stderr, diagnostics, and assertion messages have terminal control
+sequences removed and temporary workspace roots replaced with `<workspace>`.
+Non-passing compiler/runtime output is also promoted into structured report
+diagnostics so consumers do not need to relay raw artifact streams. An exit-0
+backend result with no parsed tests is rejected as `backend_error`.
+
+Every `testSpec.tests[].name` must be unique ignoring case and surrounding
+whitespace. Duplicate names block generation and execution because result
+evidence must identify each generated test unambiguously.
 
 Framework mode uses:
 

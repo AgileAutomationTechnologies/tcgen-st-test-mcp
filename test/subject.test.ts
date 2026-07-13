@@ -39,6 +39,32 @@ describe("candidate-bound source subjects", () => {
     expect(duplicateResult.subject.candidateSha256).toBeUndefined();
   });
 
+  it("blocks duplicate dependency paths that alias on Windows", () => {
+    const request = loadRequest("framework-limit-counter");
+    const dependency = request.sources.find(source => source.path !== request.candidateSourcePath)!;
+    request.sources.push({
+      path: dependency.path.toUpperCase().replace(/\//g, "\\"),
+      content: dependency.content
+    });
+
+    const result = new TcGenToStrucppNormalizer().normalize(request);
+
+    expect(result.normalization.diagnostics.map(item => item.code)).toContain(
+      "TCSUBJECT_DEPENDENCY_PATH_AMBIGUOUS"
+    );
+    expect(result.subject.dependencyBundleSha256).toBeUndefined();
+
+    const candidateAlias = loadRequest("adder");
+    candidateAlias.sources.push({
+      path: candidateAlias.candidateSourcePath.toUpperCase().replace(/\//g, "\\"),
+      content: candidateAlias.sources[0].content
+    });
+    const candidateAliasResult = new TcGenToStrucppNormalizer().normalize(candidateAlias);
+    expect(candidateAliasResult.normalization.diagnostics.map(item => item.code)).toContain(
+      "TCSUBJECT_DEPENDENCY_PATH_AMBIGUOUS"
+    );
+  });
+
   it("hashes the exact candidate and a source-order-independent dependency bundle", () => {
     const request = loadRequest("framework-limit-counter");
     const expectedCandidate = request.sources.find(source => source.path === request.candidateSourcePath);

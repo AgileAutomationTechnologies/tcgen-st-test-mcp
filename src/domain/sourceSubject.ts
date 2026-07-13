@@ -48,6 +48,19 @@ export function resolveSourceSubject(request: Pick<NormalizeRequest, "candidateS
 
   const [{ source: candidate, index: candidateIndex }] = matches;
   const dependencies = sources.filter((_, index) => index !== candidateIndex);
+  const duplicateDependencyPath = findDuplicateWindowsPath(sources);
+  if (duplicateDependencyPath) {
+    return {
+      subject,
+      diagnostics: [
+        diagnostic(
+          "error",
+          "TCSUBJECT_DEPENDENCY_PATH_AMBIGUOUS",
+          `Dependency source path '${duplicateDependencyPath}' is duplicated by a case or slash alias; every logical Windows path must occur exactly once.`
+        )
+      ]
+    };
+  }
   subject.candidateSha256 = sha256(candidate.content);
   subject.dependencyBundleSha256 = canonicalDependencyBundleSha256(dependencies);
   return { subject, diagnostics: [] };
@@ -70,6 +83,23 @@ function compareSources(left: SourceFile, right: SourceFile): number {
   if (left.content < right.content) return -1;
   if (left.content > right.content) return 1;
   return 0;
+}
+
+function findDuplicateWindowsPath(sources: SourceFile[]): string {
+  const seen = new Set<string>();
+  for (const source of sources) {
+    const identity = source.path
+      .trim()
+      .replace(/\\/g, "/")
+      .split("/")
+      .filter(segment => segment.length > 0 && segment !== ".")
+      .map(segment => segment.replace(/[ .]+$/g, ""))
+      .join("/")
+      .toLowerCase();
+    if (seen.has(identity)) return source.path;
+    seen.add(identity);
+  }
+  return "";
 }
 
 function sha256(text: string): string {

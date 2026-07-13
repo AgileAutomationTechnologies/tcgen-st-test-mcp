@@ -18,6 +18,8 @@ export interface FrameworkTestFile {
   mode: "framework";
   discoveredFrameworkTests: string[];
   selectedFrameworkTests: string[];
+  generatedTestNames: string[];
+  coveredExecutableObjects: string[];
 }
 
 const frameworkInfrastructure = new Set([
@@ -107,7 +109,9 @@ export class FrameworkTestBuilder {
       sourceFiles: [{ path: "tcgen_framework_shim.st", content: frameworkShim }],
       mode: "framework",
       discoveredFrameworkTests: candidates.map(testBlock => testBlock.name),
-      selectedFrameworkTests: selected.map(testBlock => testBlock.name)
+      selectedFrameworkTests: selected.map(testBlock => testBlock.name),
+      generatedTestNames: selected.map(testBlock => frameworkWrapperName(testBlock.name)),
+      coveredExecutableObjects: selected.map(testBlock => testBlock.name)
     };
   }
 }
@@ -135,7 +139,9 @@ function emptyFrameworkTest(
     sourceFiles: [],
     mode: "framework",
     discoveredFrameworkTests,
-    selectedFrameworkTests
+    selectedFrameworkTests,
+    generatedTestNames: [],
+    coveredExecutableObjects: []
   };
 }
 
@@ -210,7 +216,7 @@ function emitWrapperTests(testBlocks: TcGenObject[], maxScans: number): string {
   const lines: string[] = [];
   for (const testBlock of testBlocks) {
     const instance = sanitizeIdentifier(`test_${testBlock.name}`);
-    lines.push(`TEST 'framework ${escapeString(testBlock.name)}'`);
+    lines.push(`TEST '${escapeString(frameworkWrapperName(testBlock.name))}'`);
     lines.push("VAR");
     lines.push(`    ${instance} : ${testBlock.name};`);
     lines.push("    scan : DINT;");
@@ -238,6 +244,10 @@ function emitWrapperTests(testBlocks: TcGenObject[], maxScans: number): string {
     lines.push("END_TEST", "");
   }
   return lines.join("\n").trimEnd() + "\n";
+}
+
+function frameworkWrapperName(testBlockName: string): string {
+  return `framework ${testBlockName}`;
 }
 
 const frameworkShim = `TYPE E_TestState :

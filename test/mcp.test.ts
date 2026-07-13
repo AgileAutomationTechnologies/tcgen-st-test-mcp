@@ -23,6 +23,22 @@ describe("MCP tool metadata", () => {
     }
   });
 
+  it("advertises semantic report schema v2 on generate and run tools", () => {
+    for (const tool of toolDefinitions.filter(tool => tool.name === "tcgen_st_test_generate" || tool.name === "tcgen_st_test_run")) {
+      const metadata = (tool.metadata as Record<string, Record<string, unknown>>).tcgen;
+      expect(metadata.semanticReportSchemaVersion).toBe(2);
+      expect(metadata.evidencePaths).toEqual(
+        expect.arrayContaining([
+          "structuredContent.testMode",
+          "structuredContent.coveredExecutableObjects",
+          "structuredContent.generatedTestNames",
+          "structuredContent.subject.candidateSha256",
+          "structuredContent.subject.dependencyBundleSha256"
+        ])
+      );
+    }
+  });
+
   it("keeps the advertised runtime version synchronized with the package", () => {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
     expect(packageVersion).toBe(packageJson.version);

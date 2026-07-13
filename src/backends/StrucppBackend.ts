@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, extname, join, resolve } from "node:path";
+import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { BackendCheckResult, Diagnostic, diagnostic } from "../domain/models.js";
+import { sanitizeCompilerOutput } from "../domain/reportSanitizer.js";
 
 export interface BackendRunResult {
   status: "passed" | "failed" | "compile_error" | "backend_error" | "timeout";
@@ -44,11 +46,24 @@ const testedVersion = "0.5.12";
 const developmentMsys2Gpp = "C:\\msys64\\ucrt64\\bin\\g++.exe";
 const bundledStrucppRelativePath = join("backend", "strucpp-win.exe");
 const bundledGppRelativePath = join("toolchain", "mingw64", "bin", "g++.exe");
+const verifiedRuntimeManifests = new Set<string>();
+const semanticRuntimeChecks = new Map<string, Promise<SemanticRuntimeCheck>>();
+const semanticRejectedStrucppOverrides = new Map<string, string>();
+
+type SemanticRuntimeCheck = {
+  available: boolean;
+  detail?: string;
+};
 
 export class StrucppBackend {
   async check(): Promise<BackendCheckResult> {
     const diagnostics: Diagnostic[] = [];
-    const backend = await resolveCompatibleStrucpp(diagnostics);
+    const gpp = await resolveCompatibleGpp(true);
+    diagnostics.push(...gpp.diagnostics);
+    const runtimeIntegrity = await verifyRuntimeManifest(diagnostics);
+    const backend = runtimeIntegrity && gpp.available && gpp.executable
+      ? await resolveRuntimeCompatibleStrucpp(gpp.executable, diagnostics)
+      : await resolveCompatibleStrucpp(diagnostics);
     if (!backend) {
       return {
         backend: "strucpp",
@@ -60,10 +75,6 @@ export class StrucppBackend {
             : [diagnostic("error", "STRUCPP_NOT_FOUND", "STruC++ executable was not found via STRUCPP_PATH or PATH.")]
       };
     }
-
-    const gpp = await resolveCompatibleGpp(true);
-    diagnostics.push(...gpp.diagnostics);
-    const runtimeIntegrity = await verifyRuntimeManifest(diagnostics);
 
     return {
       backend: "strucpp",
@@ -82,6 +93,9 @@ export class StrucppBackend {
 
   async run(sourcePaths: string[], testPath: string, options: { timeoutMs?: number } = {}): Promise<BackendRunResult> {
     const diagnostics: Diagnostic[] = [];
+    const gpp = await resolveCompatibleGpp(true);
+    diagnostics.push(...gpp.diagnostics);
+    const runtimeIntegrity = await verifyRuntimeManifest(diagnostics);
     const backend = await resolveCompatibleStrucpp(diagnostics);
     if (!backend) {
       return {
@@ -98,7 +112,7 @@ export class StrucppBackend {
       };
     }
 
-    if (!(await verifyRuntimeManifest(diagnostics))) {
+    if (!runtimeIntegrity) {
       return {
         status: "backend_error",
         executable: backend.command.executable,
@@ -114,8 +128,6 @@ export class StrucppBackend {
         tests: []
       };
     }
-    const gpp = await resolveCompatibleGpp(true);
-    diagnostics.push(...gpp.diagnostics);
     if (!gpp.available || !gpp.executable) {
       return {
         status: "backend_error",
@@ -156,7 +168,16 @@ export class StrucppBackend {
     }
 
     const tests = parseTests(result.stdout + "\n" + result.stderr);
-    const status = classify(result.exitCode, result.stdout, result.stderr, tests);
+    const status = classifyBackendRun(result.exitCode, result.stdout, result.stderr, tests);
+    if (result.exitCode === 0 && executedTestCount(tests) === 0) {
+      diagnostics.push(
+        diagnostic(
+          "error",
+          "STRUCPP_NO_TEST_RESULTS",
+          "STruC++ exited successfully but reported no executed semantic tests; the result is not trusted."
+        )
+      );
+    }
     return {
       status,
       executable: backend.command.executable,
@@ -201,29 +222,39 @@ async function resolveCompatibleStrucpp(diagnostics: Diagnostic[]): Promise<Reso
       const version = await runVersion(override, overrideDiagnostics);
       const detected = version && /\b\d+\.\d+\.\d+\b/.exec(version)?.[0];
       if (detected === testedVersion) {
-        diagnostics.push(...overrideDiagnostics);
-        return { command: override, version: version! };
+        const overrideIdentity = resolve(override.executable).toLowerCase();
+        const overrideGeneration = await semanticRuntimeGeneration(override);
+        if (semanticRejectedStrucppOverrides.get(overrideIdentity) !== overrideGeneration) {
+          semanticRejectedStrucppOverrides.delete(overrideIdentity);
+          diagnostics.push(...overrideDiagnostics);
+          return { command: override, version: detected };
+        }
+        diagnostics.push(
+          ...overrideDiagnostics,
+          diagnostic(
+            "warning",
+            "STRUCPP_OVERRIDE_RUNTIME_INCOMPATIBLE",
+            "The configured STruC++ override previously failed the semantic runtime self-test; using the bundled runtime.",
+            { blocking: false }
+          )
+        );
+      } else {
+        diagnostics.push(
+          diagnostic(
+            "warning",
+            "STRUCPP_OVERRIDE_VERSION_MISMATCH",
+            `Configured STruC++ '${explicitPath}' reports '${version ?? "unknown"}', not ${testedVersion}; falling back to the bundled runtime.`,
+            { blocking: false }
+          )
+        );
       }
-      diagnostics.push(
-        diagnostic(
-          "warning",
-          "STRUCPP_OVERRIDE_VERSION_MISMATCH",
-          `Configured STruC++ '${explicitPath}' reports '${version ?? "unknown"}', not ${testedVersion}; falling back to the bundled runtime.`,
-          { blocking: false }
-        )
-      );
     } else {
       diagnostics.push(...overrideDiagnostics.map(item => ({ ...item, severity: "warning" as const, blocking: false })));
     }
   }
 
-  const bundledPath = resolvePackFile(bundledStrucppRelativePath);
-  if (bundledPath && (await fileExists(bundledPath))) {
-    const command = nativeCommand(bundledPath, dirname(bundledPath));
-    const version = await runVersion(command, diagnostics);
-    if (validateTestedVersion(version, diagnostics)) return { command, version };
-    return undefined;
-  }
+  const bundled = await resolveBundledStrucpp(diagnostics);
+  if (bundled) return bundled;
 
   if (!explicitPath) {
     diagnostics.push(diagnostic("error", "STRUCPP_NOT_FOUND", "Bundled STruC++ 0.5.12 is missing. Run TcGen installer Repair."));
@@ -231,6 +262,72 @@ async function resolveCompatibleStrucpp(diagnostics: Diagnostic[]): Promise<Reso
     diagnostics.push(diagnostic("error", "STRUCPP_BUNDLED_FALLBACK_MISSING", "The configured STruC++ override is incompatible and the bundled runtime is missing. Run TcGen installer Repair."));
   }
   return undefined;
+}
+
+async function resolveRuntimeCompatibleStrucpp(
+  gppExecutable: string,
+  diagnostics: Diagnostic[]
+): Promise<ResolvedBackend | undefined> {
+  const selected = await resolveCompatibleStrucpp(diagnostics);
+  if (!selected) return undefined;
+
+  const selectedDiagnostics: Diagnostic[] = [];
+  if (await verifySemanticRuntime(selected.command, gppExecutable, selectedDiagnostics)) {
+    diagnostics.push(...selectedDiagnostics);
+    return selected;
+  }
+
+  const bundledPath = resolvePackFile(bundledStrucppRelativePath);
+  const selectedIsOverride = Boolean(
+    process.env.STRUCPP_PATH?.trim()
+    && bundledPath
+    && !samePath(selected.command.executable, bundledPath)
+  );
+  if (!selectedIsOverride) {
+    diagnostics.push(...selectedDiagnostics);
+    return undefined;
+  }
+
+  semanticRejectedStrucppOverrides.set(
+    resolve(selected.command.executable).toLowerCase(),
+    await semanticRuntimeGeneration(selected.command)
+  );
+  diagnostics.push(
+    ...selectedDiagnostics.map(item => ({
+      ...item,
+      severity: "warning" as const,
+      blocking: false
+    })),
+    diagnostic(
+      "warning",
+      "STRUCPP_OVERRIDE_RUNTIME_INCOMPATIBLE",
+      "The configured STruC++ override failed the semantic runtime self-test; using the bundled runtime.",
+      { blocking: false }
+    )
+  );
+  const bundledDiagnostics: Diagnostic[] = [];
+  const bundled = await resolveBundledStrucpp(bundledDiagnostics);
+  if (!bundled) {
+    diagnostics.push(...bundledDiagnostics);
+    return undefined;
+  }
+  if (!(await verifySemanticRuntime(bundled.command, gppExecutable, bundledDiagnostics))) {
+    diagnostics.push(...bundledDiagnostics);
+    return undefined;
+  }
+  diagnostics.push(...bundledDiagnostics);
+  return bundled;
+}
+
+async function resolveBundledStrucpp(
+  diagnostics: Diagnostic[]
+): Promise<ResolvedBackend | undefined> {
+  const bundledPath = resolvePackFile(bundledStrucppRelativePath);
+  if (!bundledPath || !(await fileExists(bundledPath))) return undefined;
+  const command = nativeCommand(bundledPath, dirname(bundledPath));
+  const version = await runVersion(command, diagnostics);
+  if (!validateTestedVersion(version, diagnostics)) return undefined;
+  return { command, version: testedVersion };
 }
 
 async function resolveStrucppPath(explicitPath: string, diagnostics: Diagnostic[]): Promise<ResolvedCommand | undefined> {
@@ -338,36 +435,279 @@ function resolvePackFile(relativePath: string): string | undefined {
   return root ? join(root, relativePath) : undefined;
 }
 
-async function verifyRuntimeManifest(diagnostics: Diagnostic[]): Promise<boolean> {
+export async function verifyRuntimeManifest(diagnostics: Diagnostic[]): Promise<boolean> {
   const root = packRoot();
   if (!root) return true;
   const manifestPath = join(root, "runtime-manifest.json");
   try {
     const manifestText = (await readFile(manifestPath, "utf8")).replace(/^\uFEFF/, "");
+    const manifestIdentity = `${root.toLowerCase()}|${createHash("sha256").update(manifestText, "utf8").digest("hex")}`;
     const manifest = JSON.parse(manifestText) as {
-      files?: Array<{ path?: string; sha256?: string }>;
+      files?: Array<{ path?: string; sha256?: string; size?: number }>;
     };
-    const criticalPaths = new Set([
+    if (!Array.isArray(manifest.files) || manifest.files.length === 0) {
+      throw new Error("manifest does not contain a non-empty files array");
+    }
+
+    const requiredPaths = new Set([
       "runtime/tcgen-st-test-mcp.exe",
       "backend/strucpp-win.exe",
+      "backend/libs/iec-standard-fb.stlib",
       "toolchain/mingw64/bin/g++.exe"
     ]);
-    for (const entry of manifest.files ?? []) {
-      const normalized = (entry.path ?? "").replace(/\\/g, "/");
-      if (!criticalPaths.has(normalized)) continue;
-      const fullPath = join(root, ...normalized.split("/"));
-      const actual = createHash("sha256").update(await readFile(fullPath)).digest("hex");
-      if (actual.toLowerCase() !== (entry.sha256 ?? "").toLowerCase()) {
-        diagnostics.push(diagnostic("error", "RUNTIME_INTEGRITY_FAILED", `Virtual Tests runtime integrity failed for '${normalized}'. Run TcGen installer Repair.`));
+    const seen = new Set<string>();
+    const entries = manifest.files.map(entry => {
+      const normalized = normalizedManifestPath(entry.path);
+      if (!normalized) throw new Error(`manifest contains an unsafe file path '${String(entry.path ?? "")}'`);
+      const identity = normalized.toLowerCase();
+      if (seen.has(identity)) throw new Error(`manifest contains duplicate file path '${normalized}'`);
+      seen.add(identity);
+      requiredPaths.delete(identity);
+      if (!/^[a-f0-9]{64}$/i.test(entry.sha256 ?? "")) {
+        throw new Error(`manifest contains an invalid SHA-256 for '${normalized}'`);
+      }
+      if (entry.size !== undefined && (!Number.isSafeInteger(entry.size) || entry.size < 0)) {
+        throw new Error(`manifest contains an invalid size for '${normalized}'`);
+      }
+      return { ...entry, normalized };
+    });
+    if (requiredPaths.size > 0) {
+      throw new Error(`manifest is missing ${[...requiredPaths].join(", ")}`);
+    }
+
+    const concurrency = 8;
+    const runtimeFiles: Array<{
+      normalized: string;
+      sha256: string;
+      fullPath: string;
+      size: number;
+      mtimeMs: number;
+      ctimeMs: number;
+    }> = [];
+    for (let offset = 0; offset < entries.length; offset += concurrency) {
+      const inspected = await Promise.all(
+        entries.slice(offset, offset + concurrency).map(async entry => {
+          const fullPath = join(root, ...entry.normalized.split("/"));
+          try {
+            const fileStat = await stat(fullPath);
+            if (!fileStat.isFile()) return { failure: `runtime entry '${entry.normalized}' is not a file` };
+            if (entry.size !== undefined && fileStat.size !== entry.size) {
+              return { failure: `runtime entry '${entry.normalized}' has an unexpected size` };
+            }
+            return {
+              file: {
+                normalized: entry.normalized,
+                sha256: entry.sha256!,
+                fullPath,
+                size: fileStat.size,
+                mtimeMs: fileStat.mtimeMs,
+                ctimeMs: fileStat.ctimeMs
+              }
+            };
+          } catch {
+            return { failure: `runtime entry '${entry.normalized}' is missing or unreadable` };
+          }
+        })
+      );
+      const failure = inspected.find(item => item.failure)?.failure;
+      if (failure) {
+        clearRuntimeManifestCache(root);
+        diagnostics.push(diagnostic("error", "RUNTIME_INTEGRITY_FAILED", `Virtual Tests ${failure}. Run TcGen installer Repair.`));
         return false;
       }
-      criticalPaths.delete(normalized);
+      runtimeFiles.push(...inspected.flatMap(item => item.file ? [item.file] : []));
     }
-    if (criticalPaths.size > 0) throw new Error(`manifest is missing ${[...criticalPaths].join(", ")}`);
+
+    const runtimeGeneration = createHash("sha256")
+      .update(JSON.stringify(runtimeFiles.map(file => [file.normalized, file.size, file.mtimeMs, file.ctimeMs])), "utf8")
+      .digest("hex");
+    const runtimeIdentity = `${manifestIdentity}|${runtimeGeneration}`;
+    if (verifiedRuntimeManifests.has(runtimeIdentity)) return true;
+
+    for (let offset = 0; offset < runtimeFiles.length; offset += concurrency) {
+      const failures = await Promise.all(
+        runtimeFiles.slice(offset, offset + concurrency).map(async file => {
+          try {
+            const actual = await sha256File(file.fullPath);
+            return actual.toLowerCase() === file.sha256.toLowerCase()
+              ? ""
+              : `runtime entry '${file.normalized}' failed SHA-256 verification`;
+          } catch {
+            return `runtime entry '${file.normalized}' is missing or unreadable`;
+          }
+        })
+      );
+      const failure = failures.find(Boolean);
+      if (failure) {
+        clearRuntimeManifestCache(root);
+        diagnostics.push(diagnostic("error", "RUNTIME_INTEGRITY_FAILED", `Virtual Tests ${failure}. Run TcGen installer Repair.`));
+        return false;
+      }
+    }
+    clearRuntimeManifestCache(root);
+    verifiedRuntimeManifests.add(runtimeIdentity);
     return true;
   } catch (error) {
     diagnostics.push(diagnostic("error", "RUNTIME_MANIFEST_INVALID", `Virtual Tests runtime manifest is invalid: ${error instanceof Error ? error.message : String(error)}. Run TcGen installer Repair.`));
     return false;
+  }
+}
+
+function clearRuntimeManifestCache(root: string): void {
+  const prefix = `${root.toLowerCase()}|`;
+  for (const identity of verifiedRuntimeManifests) {
+    if (identity.startsWith(prefix)) verifiedRuntimeManifests.delete(identity);
+  }
+}
+
+function normalizedManifestPath(value: string | undefined): string | undefined {
+  const raw = (value ?? "").trim().replace(/\\/g, "/");
+  if (!raw || isAbsolute(raw) || /^[A-Za-z]:/.test(raw)) return undefined;
+  const segments = raw.split("/");
+  if (segments.some(segment => !segment || segment === "." || segment === "..")) return undefined;
+  return segments.join("/");
+}
+
+function sha256File(path: string): Promise<string> {
+  return new Promise((resolveHash, rejectHash) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(path);
+    stream.on("data", chunk => hash.update(chunk));
+    stream.on("error", rejectHash);
+    stream.on("end", () => resolveHash(hash.digest("hex")));
+  });
+}
+
+async function verifySemanticRuntime(
+  command: ResolvedCommand,
+  gppExecutable: string,
+  diagnostics: Diagnostic[]
+): Promise<boolean> {
+  const identity = [
+    resolve(command.executable).toLowerCase(),
+    command.argsPrefix.join("|"),
+    resolve(gppExecutable).toLowerCase(),
+    (packRoot() ?? "development").toLowerCase()
+  ].join("|");
+
+  let check = semanticRuntimeChecks.get(identity);
+  if (!check) {
+    check = runSemanticRuntimeSelfTest(command, gppExecutable);
+    semanticRuntimeChecks.set(identity, check);
+  }
+  const result = await check;
+  semanticRuntimeChecks.delete(identity);
+  if (result.available) return true;
+
+  diagnostics.push(
+    diagnostic(
+      "error",
+      "STRUCPP_SEMANTIC_SELF_TEST_FAILED",
+      `STruC++ could not compile and execute its pinned IEC standard-function-block self-test${result.detail ? `: ${result.detail}` : ""}. Run TcGen installer Repair.`,
+      { sourceKind: "backend" }
+    )
+  );
+  return false;
+}
+
+async function semanticRuntimeGeneration(command: ResolvedCommand): Promise<string> {
+  const paths = new Set<string>([
+    resolve(command.executable),
+    ...command.argsPrefix.filter(value => !value.startsWith("-")).map(value => resolve(value))
+  ]);
+  if (command.cwd) {
+    paths.add(join(command.cwd, "libs", "iec-standard-fb.stlib"));
+    paths.add(join(command.cwd, "libs", "sources", "iec-standard-fb", "library.json"));
+    paths.add(join(command.cwd, "libs", "sources", "iec-standard-fb", "timer.st"));
+  }
+
+  const generation = [];
+  for (const path of [...paths].sort((left, right) => left.localeCompare(right))) {
+    const fileStat = await tryStat(path);
+    generation.push([
+      path.toLowerCase(),
+      fileStat?.isFile() ?? false,
+      fileStat?.size ?? -1,
+      fileStat?.mtimeMs ?? -1,
+      fileStat?.ctimeMs ?? -1
+    ]);
+  }
+  return createHash("sha256").update(JSON.stringify(generation), "utf8").digest("hex");
+}
+
+async function runSemanticRuntimeSelfTest(
+  command: ResolvedCommand,
+  gppExecutable: string
+): Promise<SemanticRuntimeCheck> {
+  const directory = await mkdtemp(join(tmpdir(), "tcgen-strucpp-check-"));
+  const sourcePath = join(directory, "runtime_self_test.st");
+  const testPath = join(directory, "semantic_tests.st");
+  try {
+    await writeFile(
+      sourcePath,
+      [
+        "FUNCTION_BLOCK FB_TcGenRuntimeSelfTest",
+        "VAR_INPUT",
+        "    xEnable : BOOL;",
+        "END_VAR",
+        "VAR_OUTPUT",
+        "    xDone : BOOL;",
+        "END_VAR",
+        "VAR",
+        "    tonDelay : TON;",
+        "END_VAR",
+        "tonDelay(IN := xEnable, PT := T#1ms);",
+        "xDone := tonDelay.Q;",
+        "END_FUNCTION_BLOCK",
+        ""
+      ].join("\n"),
+      "utf8"
+    );
+    await writeFile(
+      testPath,
+      [
+        "TEST 'tcgen-runtime-self-test'",
+        "VAR",
+        "    dut : FB_TcGenRuntimeSelfTest;",
+        "END_VAR",
+        "dut(xEnable := TRUE);",
+        "ASSERT_FALSE(dut.xDone);",
+        "ADVANCE_TIME(1000000);",
+        "dut(xEnable := TRUE);",
+        "ASSERT_TRUE(dut.xDone);",
+        "END_TEST",
+        ""
+      ].join("\n"),
+      "utf8"
+    );
+    const result = await spawnWithTimeout(
+      command,
+      [sourcePath, "--gpp", gppExecutable, "--test", testPath],
+      30_000,
+      gppExecutable
+    );
+    if (result.timedOut) return { available: false, detail: "the self-test timed out" };
+    const tests = parseTests(`${result.stdout}\n${result.stderr}`);
+    if (
+      result.exitCode === 0
+      && tests.length === 1
+      && tests[0].name === "tcgen-runtime-self-test"
+      && tests[0].status === "passed"
+    ) {
+      return { available: true };
+    }
+    const detail = sanitizeCompilerOutput(
+      (result.stderr || result.stdout || "no compiler diagnostic").trim(),
+      directory
+    ).slice(0, 2_000);
+    return { available: false, detail };
+  } catch (error) {
+    return {
+      available: false,
+      detail: sanitizeCompilerOutput(error instanceof Error ? error.message : String(error), directory).slice(0, 2_000)
+    };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
   }
 }
 
@@ -380,7 +720,8 @@ async function verifyCpp17Compiler(executable: string, diagnostics: Diagnostic[]
     const compiler = nativeCommand(executable, directory);
     const compile = await spawnWithTimeout(compiler, ["-std=c++17", source, "-o", output], 15_000, executable);
     if (compile.exitCode !== 0) {
-      diagnostics.push(diagnostic("error", "CPP17_COMPILE_FAILED", `The configured C++ compiler failed the C++17 self-test: ${compile.stderr.trim() || "unknown compiler error"}. Run TcGen installer Repair.`));
+      const compilerDetail = sanitizeCompilerOutput(compile.stderr.trim(), directory) || "unknown compiler error";
+      diagnostics.push(diagnostic("error", "CPP17_COMPILE_FAILED", `The configured C++ compiler failed the C++17 self-test: ${compilerDetail}. Run TcGen installer Repair.`));
       return false;
     }
     const run = await spawnWithTimeout(nativeCommand(output, directory), [], 5_000, executable);
@@ -496,7 +837,7 @@ function spawnWithTimeout(
       shell: false,
       windowsHide: true,
       cwd: command.cwd,
-      env: allowedEnv(gppExecutable)
+      env: backendChildEnvironment(gppExecutable)
     });
     let stdout = "";
     let stderr = "";
@@ -528,7 +869,11 @@ function spawnWithTimeout(
 function killProcessTree(pid: number | undefined): void {
   if (!pid) return;
   if (process.platform === "win32") {
-    spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true });
+    const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
+    spawn(join(systemRoot, "System32", "taskkill.exe"), ["/pid", String(pid), "/T", "/F"], {
+      windowsHide: true,
+      env: backendChildEnvironment()
+    });
     return;
   }
   try {
@@ -542,24 +887,35 @@ function killProcessTree(pid: number | undefined): void {
   }
 }
 
-function allowedEnv(gppExecutable?: string): NodeJS.ProcessEnv {
+export function backendChildEnvironment(gppExecutable?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of ["TEMP", "TMP", "HOME", "USERPROFILE", "SYSTEMROOT", "SystemRoot"]) {
     if (process.env[key]) env[key] = process.env[key];
   }
   const pathKey = process.platform === "win32" ? "Path" : "PATH";
-  const currentPath = process.env.PATH ?? process.env.Path ?? "";
-  env[pathKey] = gppExecutable ? `${dirname(gppExecutable)}${delimiter}${currentPath}` : currentPath;
+  // STruC++ and generated executables only need the selected compiler's
+  // runtime directory. Do not inherit host PATH entries into semantic child
+  // processes; bundled and advanced-override compilers are both explicit.
+  env[pathKey] = gppExecutable ? dirname(gppExecutable) : "";
   return env;
 }
 
-function classify(exitCode: number | null, stdout: string, stderr: string, tests: BackendRunResult["tests"]): BackendRunResult["status"] {
+export function classifyBackendRun(
+  exitCode: number | null,
+  stdout: string,
+  stderr: string,
+  tests: BackendRunResult["tests"]
+): BackendRunResult["status"] {
   const combined = `${stdout}\n${stderr}`;
   if (tests.some(test => test.status === "failed")) return "failed";
   if (/^\s*FAIL:/im.test(combined) || (/Assertion failed/i.test(combined) && exitCode !== 0)) return "failed";
   if (/Error compiling|Compilation failed|syntax|parse|semantic|error:/i.test(combined) && exitCode !== 0) return "compile_error";
-  if (exitCode === 0) return "passed";
+  if (exitCode === 0 && executedTestCount(tests) > 0) return "passed";
   return "backend_error";
+}
+
+function executedTestCount(tests: BackendRunResult["tests"]): number {
+  return tests.filter(test => test.status === "passed" || test.status === "failed").length;
 }
 
 function parseTests(text: string): BackendRunResult["tests"] {

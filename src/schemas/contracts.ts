@@ -111,6 +111,7 @@ const diagnosticSchema = {
     blocking: { type: "boolean" },
     code: { type: "string", minLength: 1 },
     message: { type: "string" },
+    sourceKind: { enum: ["generated_test_harness", "candidate", "backend", "mixed", "unknown"] },
     original: { $ref: "#/$defs/sourceSpan" },
     generated: { $ref: "#/$defs/sourceSpan" },
     object: { type: "string" },
@@ -154,11 +155,41 @@ export const normalizationReportSchema = {
 export const semanticReportSchema = {
   $id: "https://tcgen.dev/schemas/semantic-report.schema.json",
   type: "object",
-  required: ["schemaVersion", "subject", "verdict", "backend", "normalization", "summary", "tests", "diagnostics", "hashes", "qualification"],
+  required: [
+    "schemaVersion",
+    "testMode",
+    "coveredExecutableObjects",
+    "generatedTestNames",
+    "subject",
+    "verdict",
+    "backend",
+    "normalization",
+    "summary",
+    "tests",
+    "diagnostics",
+    "hashes",
+    "qualification"
+  ],
   additionalProperties: false,
   properties: {
-    schemaVersion: { const: 1 },
-    subject: { $ref: "#/$defs/semanticTestSubject" },
+    schemaVersion: { const: 2 },
+    testMode: { enum: ["generated", "framework"] },
+    coveredExecutableObjects: {
+      type: "array",
+      uniqueItems: true,
+      items: { type: "string", minLength: 1 }
+    },
+    generatedTestNames: {
+      type: "array",
+      uniqueItems: true,
+      items: { type: "string", minLength: 1 }
+    },
+    subject: {
+      allOf: [
+        { $ref: "#/$defs/semanticTestSubject" },
+        { required: ["candidateSourcePath", "candidateSha256", "dependencyBundleSha256"] }
+      ]
+    },
     verdict: { enum: ["passed", "failed", "partial", "unsupported", "compile_error", "backend_error", "timeout"] },
     backend: {
       type: "object",
@@ -175,14 +206,17 @@ export const semanticReportSchema = {
     normalization: { $ref: "#/$defs/normalizationSummary" },
     summary: {
       type: "object",
-      required: ["passed", "failed", "skipped", "compileErrors", "runtimeErrors"],
+      required: ["passed", "failed", "skipped", "compileErrors", "runtimeErrors", "timedOut", "unsupported", "total"],
       additionalProperties: false,
       properties: {
         passed: { type: "integer", minimum: 0 },
         failed: { type: "integer", minimum: 0 },
         skipped: { type: "integer", minimum: 0 },
         compileErrors: { type: "integer", minimum: 0 },
-        runtimeErrors: { type: "integer", minimum: 0 }
+        runtimeErrors: { type: "integer", minimum: 0 },
+        timedOut: { type: "integer", minimum: 0 },
+        unsupported: { type: "integer", minimum: 0 },
+        total: { type: "integer", minimum: 0 }
       }
     },
     tests: {
@@ -219,7 +253,7 @@ export const semanticReportSchema = {
     },
     hashes: {
       type: "object",
-      required: ["request"],
+      required: ["request", "testSource"],
       additionalProperties: false,
       properties: {
         request: { type: "string" },
