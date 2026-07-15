@@ -43,7 +43,7 @@ type ResolvedBackend = {
   version: string;
 };
 
-export const testedStrucppVersion = "0.5.13-tcgen.1";
+export const testedStrucppVersion = "0.5.13-tcgen.2";
 const developmentMsys2Gpp = "C:\\msys64\\ucrt64\\bin\\g++.exe";
 const bundledStrucppRelativePath = join("backend", "strucpp-win.exe");
 const bundledGppRelativePath = join("toolchain", "mingw64", "bin", "g++.exe");

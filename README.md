@@ -224,12 +224,12 @@ requires a real external Node executable through `TCGEN_ST_NODE_PATH` or PATH;
 the packaged MCP refuses to recursively use itself as Node. Prefer native
 `strucpp-win.exe` in product installations, which needs no external Node.
 
-The v0.7 Windows validation target is the AgileAutomationTechnologies STruC++
-downstream branch at commit `5068cdf81ee55a9fcf800845c2798793e94da7df`,
+The v0.8 Windows validation target is the AgileAutomationTechnologies STruC++
+downstream release at commit `627f22547db4af04f2ea17135d99abd0191ffc3c`,
 based on upstream STruC++ `0.5.13` plus the qualified TcGen downstream patch set,
-identified as `0.5.13-tcgen.1`.
+identified as `0.5.13-tcgen.2`.
 Backend checks and semantic runs fail closed when the detected STruC++ version
-is missing or differs from the complete `0.5.13-tcgen.1` distribution version.
+is missing or differs from the complete `0.5.13-tcgen.2` distribution version.
 
 ## Verification
 

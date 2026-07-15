@@ -28,9 +28,9 @@ jobs:
     name: native-windows-strucpp
     runs-on: windows-latest
     env:
-      STRUCPP_REF: 5068cdf81ee55a9fcf800845c2798793e94da7df
-      STRUCPP_DISTRIBUTION_VERSION: 0.5.13-tcgen.1
-      STRUCPP_EXPECTED_VERSION: 0.5.13-tcgen.1
+      STRUCPP_REF: 627f22547db4af04f2ea17135d99abd0191ffc3c
+      STRUCPP_DISTRIBUTION_VERSION: 0.5.13-tcgen.2
+      STRUCPP_EXPECTED_VERSION: 0.5.13-tcgen.2
       STRUCPP_PATH: ${{ github.workspace }}\STruCpp\dist\bin\strucpp-win.exe
     steps:
       - uses: actions/checkout@v4

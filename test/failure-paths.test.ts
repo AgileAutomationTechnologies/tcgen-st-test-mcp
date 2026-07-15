@@ -25,7 +25,7 @@ describe("failure paths", () => {
       executionAttempted: false,
       executable: "strucpp-win.exe",
       cliMode: "native",
-      version: "0.5.13-tcgen.1",
+      version: "0.5.13-tcgen.2",
       stdout: "",
       stderr: "",
       exitCode: null,
@@ -100,7 +100,7 @@ describe("failure paths", () => {
       fakeCli,
       [
         "if (process.argv.includes('--version')) {",
-        "  console.log('STruC++ version 0.5.13-tcgen.1');",
+        "  console.log('STruC++ version 0.5.13-tcgen.2');",
         "  process.exit(0);",
         "}",
         "console.log('Compilation completed without executing tests.');",
@@ -138,7 +138,7 @@ describe("failure paths", () => {
       fakeCli,
       [
         "if (process.argv.includes('--version')) {",
-        "  console.log('STruC++ version 0.5.13-tcgen.1');",
+        "  console.log('STruC++ version 0.5.13-tcgen.2');",
         "  process.exit(0);",
         "}",
         "setInterval(() => {}, 1000);"

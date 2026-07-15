@@ -22,14 +22,14 @@ import { exampleNames, loadRequest, localStrucppRepo, withEnv } from "./helpers.
 
 describe("STruC++ backend", () => {
   it("retains the complete qualified downstream SemVer identity", () => {
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.1")).toBe("0.5.13-tcgen.1");
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.1+win64.2")).toBe(
-      "0.5.13-tcgen.1+win64.2"
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.2")).toBe("0.5.13-tcgen.2");
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.2+win64.2")).toBe(
+      "0.5.13-tcgen.2+win64.2"
     );
-    expect(detectStrucppVersion("0.5.13-tcgen.1")).toBe("0.5.13-tcgen.1");
-    expect(detectStrucppVersion("evil 0.5.13-tcgen.1 suffix")).toBeUndefined();
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.1 extra")).toBeUndefined();
-    expect(testedStrucppVersion).toBe("0.5.13-tcgen.1");
+    expect(detectStrucppVersion("0.5.13-tcgen.2")).toBe("0.5.13-tcgen.2");
+    expect(detectStrucppVersion("evil 0.5.13-tcgen.2 suffix")).toBeUndefined();
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.2 extra")).toBeUndefined();
+    expect(testedStrucppVersion).toBe("0.5.13-tcgen.2");
   });
 
   it("rejects passing backend output that omits or invents generated tests", () => {
@@ -181,7 +181,7 @@ describe("STruC++ backend", () => {
       const check = await new StrucppBackend().check();
       expect(check.available).toBe(true);
       expect(["node", "native"]).toContain(check.cliMode);
-      expect(check.version).toContain("0.5.13-tcgen.1");
+      expect(check.version).toContain("0.5.13-tcgen.2");
     });
   }, 120_000);
 
@@ -248,7 +248,7 @@ describe("STruC++ backend", () => {
         await writeFile(fakeCli, fakeSemanticRuntimeCli(true), "utf8");
         const repaired = await new StrucppBackend().check();
         expect(repaired.available).toBe(true);
-        expect(repaired.version).toBe("0.5.13-tcgen.1");
+        expect(repaired.version).toBe("0.5.13-tcgen.2");
       });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
@@ -439,7 +439,7 @@ function dirnameForTest(path: string): string {
 function fakeSemanticRuntimeCli(passes: boolean): string {
   return [
     "if (process.argv.includes('--version')) {",
-    "  console.log('STruC++ version 0.5.13-tcgen.1');",
+    "  console.log('STruC++ version 0.5.13-tcgen.2');",
     "  process.exit(0);",
     "}",
     passes
