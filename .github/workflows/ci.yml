@@ -28,15 +28,17 @@ jobs:
     name: native-windows-strucpp
     runs-on: windows-latest
     env:
-      STRUCPP_REF: development
-      STRUCPP_PATH: ${{ github.workspace }}\STruCpp
+      STRUCPP_REF: b5becd5da4cc65672ed996874ce3779173458462
+      STRUCPP_DISTRIBUTION_VERSION: 0.5.13-tcgen.1
+      STRUCPP_EXPECTED_VERSION: 0.5.13-tcgen.1
+      STRUCPP_PATH: ${{ github.workspace }}\STruCpp\dist\bin\strucpp-win.exe
     steps:
       - uses: actions/checkout@v4
         with:
           path: tcgen-st-test-mcp
       - uses: actions/checkout@v4
         with:
-          repository: Autonomy-Logic/STruCpp
+          repository: AgileAutomationTechnologies/STruCpp
           ref: ${{ env.STRUCPP_REF }}
           path: STruCpp
       - uses: actions/setup-node@v4
@@ -64,14 +66,14 @@ jobs:
         working-directory: STruCpp
         run: |
           npm ci
-          npm run build
           npm run typecheck
-          node dist\node\cli.js --version
+          npm run build:pkg:win
+          npm run smoke:bin -- dist/bin/strucpp-win.exe
       - name: Run STruC++ native samples
         working-directory: STruCpp
         run: |
-          node dist\node\cli.js tests\st-validation\function_blocks\fb_accumulator.st --gpp $env:STRUCPP_GPP_PATH --test tests\st-validation\function_blocks\test_fb_accumulator.st
-          node dist\node\cli.js tests\st-validation\function_blocks\basic_fb.st --no-default-libs --gpp $env:STRUCPP_GPP_PATH --test tests\st-validation\function_blocks\test_basic_fb.st
+          & $env:STRUCPP_PATH tests\st-validation\function_blocks\fb_accumulator.st --gpp $env:STRUCPP_GPP_PATH --test tests\st-validation\function_blocks\test_fb_accumulator.st
+          & $env:STRUCPP_PATH tests\st-validation\function_blocks\basic_fb.st --no-default-libs --gpp $env:STRUCPP_GPP_PATH --test tests\st-validation\function_blocks\test_basic_fb.st
       - name: Run MCP native verification
         working-directory: tcgen-st-test-mcp
         run: |
