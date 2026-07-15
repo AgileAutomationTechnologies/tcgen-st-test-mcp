@@ -28,6 +28,31 @@ describe("TcGen to STruC++ normalizer", () => {
     expect(content).toContain("END_SET");
   });
 
+  it("preserves TwinCAT short-circuit operators without eager rewriting", () => {
+    const result = new TcGenToStrucppNormalizer().normalize({
+      candidateSourcePath: "short-circuit.st",
+      sources: [
+        {
+          path: "short-circuit.st",
+          content: [
+            "FUNCTION_BLOCK FB_ShortCircuit",
+            "VAR_INPUT xLeft : BOOL; xRight : BOOL; END_VAR",
+            "VAR_OUTPUT xAnd : BOOL; xOr : BOOL; END_VAR",
+            "xAnd := xLeft AND_THEN xRight;",
+            "xOr := xLeft OR_ELSE xRight;",
+            "END_FUNCTION_BLOCK"
+          ].join("\n")
+        }
+      ]
+    });
+    const content = result.normalizedFiles[0].content;
+    expect(result.normalization.diagnostics.filter(item => item.blocking)).toEqual([]);
+    expect(content).toContain("xLeft AND_THEN xRight");
+    expect(content).toContain("xLeft OR_ELSE xRight");
+    expect(content).not.toMatch(/xLeft\s+AND\s+xRight/);
+    expect(content).not.toMatch(/xLeft\s+OR\s+xRight/);
+  });
+
   it("flattens GVL and parameter-list references outside strings", () => {
     const globals = new TcGenToStrucppNormalizer().normalize(loadRequest("gvl-reference"));
     expect(globals.normalizedFiles[0].content).toContain("GVL_Config__xEnable : BOOL := TRUE;");
