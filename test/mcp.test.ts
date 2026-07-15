@@ -27,10 +27,13 @@ describe("MCP tool metadata", () => {
     for (const tool of toolDefinitions.filter(tool => tool.name === "tcgen_st_test_generate" || tool.name === "tcgen_st_test_run")) {
       const metadata = (tool.metadata as Record<string, Record<string, unknown>>).tcgen;
       expect(metadata.semanticReportSchemaVersion).toBe(2);
+      expect(metadata.capabilities).toContain("frameworkTargetCoverageV1");
+      expect(metadata.serverVersion).toBe("0.5.0");
       expect(metadata.evidencePaths).toEqual(
         expect.arrayContaining([
           "structuredContent.testMode",
           "structuredContent.coveredExecutableObjects",
+          "structuredContent.frameworkTargetCoverage",
           "structuredContent.generatedTestNames",
           "structuredContent.subject.candidateSha256",
           "structuredContent.subject.dependencyBundleSha256"

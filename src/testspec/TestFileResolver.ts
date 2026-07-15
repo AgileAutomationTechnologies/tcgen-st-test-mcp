@@ -1,8 +1,11 @@
 import {
   Diagnostic,
+  FrameworkAssertionEvidence,
   FrameworkTestConfig,
+  FrameworkTargetCoverage,
   NormalizeRequest,
   NormalizedFile,
+  SourceFile,
   TcGenTestSpec,
   diagnostic
 } from "../domain/models.js";
@@ -20,6 +23,9 @@ export interface ResolvedTestFile extends GeneratedTestFile {
   mode: "generated" | "framework";
   discoveredFrameworkTests?: string[];
   selectedFrameworkTests?: string[];
+  frameworkTargetCoverage?: FrameworkTargetCoverage[];
+  assertions?: FrameworkAssertionEvidence[];
+  frameworkTestFiles?: SourceFile[];
 }
 
 export function normalizerOptionsForTestRequest(request: TestRequest): NormalizeRuntimeOptions {
@@ -42,7 +48,7 @@ export function resolveTestFile(request: TestRequest, normalized: NormalizeResul
     return { ...new StrucppTestGenerator().generate(request.testSpec as TcGenTestSpec), sourceFiles: [], mode: "generated" };
   }
 
-  return new FrameworkTestBuilder().generate(normalized, request.frameworkTest);
+  return new FrameworkTestBuilder().generate(normalized, request.frameworkTest, request.sources);
 }
 
 function hasTestSpec(request: TestRequest): boolean {
@@ -63,6 +69,9 @@ function errorTestFile(code: string, message: string, mode: ResolvedTestFile["mo
     sourceFiles: [],
     mode,
     generatedTestNames: [],
-    coveredExecutableObjects: []
+    coveredExecutableObjects: [],
+    frameworkTargetCoverage: [],
+    assertions: [],
+    frameworkTestFiles: []
   };
 }

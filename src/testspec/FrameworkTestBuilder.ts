@@ -1,13 +1,19 @@
 import { createHash } from "node:crypto";
 import {
   Diagnostic,
+  FrameworkAssertionEvidence,
   FrameworkTestConfig,
+  FrameworkTargetCoverage,
   NormalizedFile,
+  SourceFile,
   TcGenObject,
   diagnostic
 } from "../domain/models.js";
 import { NormalizeResult, OmitObjectDecision, ReplaceObjectDecision } from "../normalizer/TcGenToStrucppNormalizer.js";
-import { stripTrivia } from "../normalizer/tokenRewrite.js";
+import {
+  isFrameworkRunnerProgram,
+  validateFrameworkTargetCoverage
+} from "./FrameworkTargetCoverageValidator.js";
 
 export interface FrameworkTestFile {
   path: string;
@@ -20,6 +26,9 @@ export interface FrameworkTestFile {
   selectedFrameworkTests: string[];
   generatedTestNames: string[];
   coveredExecutableObjects: string[];
+  frameworkTargetCoverage: FrameworkTargetCoverage[];
+  assertions: FrameworkAssertionEvidence[];
+  frameworkTestFiles: SourceFile[];
 }
 
 const frameworkInfrastructure = new Set([
@@ -69,13 +78,12 @@ export function replaceFrameworkRunnerProgram(object: TcGenObject): ReplaceObjec
   };
 }
 
-function isFrameworkRunnerProgram(object: TcGenObject): boolean {
-  const text = stripTrivia(`${object.declarationText}\n${object.implementationText}`);
-  return /\bFB_TestRunner\b/i.test(text) && /\bm_udiRegisterTest\s*\(/i.test(text);
-}
-
 export class FrameworkTestBuilder {
-  generate(normalized: NormalizeResult, config: FrameworkTestConfig | undefined): FrameworkTestFile {
+  generate(
+    normalized: NormalizeResult,
+    config: FrameworkTestConfig | undefined,
+    submittedSources: SourceFile[]
+  ): FrameworkTestFile {
     const diagnostics: Diagnostic[] = [];
     if (!isFrameworkConfig(config)) {
       diagnostics.push(diagnostic("error", "TCFRAMEWORK_MODE_UNSUPPORTED", "frameworkTest.mode must be 'tcgen-test-framework'."));
@@ -84,6 +92,13 @@ export class FrameworkTestBuilder {
 
     const candidates = discoverTestFunctionBlocks(normalized.document.objects);
     const selected = selectTestFunctionBlocks(candidates, config.testFunctionBlocks, diagnostics);
+    const targetCoverage = validateFrameworkTargetCoverage(
+      normalized,
+      selected,
+      config.targetMappings,
+      submittedSources
+    );
+    diagnostics.push(...targetCoverage.diagnostics);
     diagnostics.push(
       diagnostic("info", "TCFRAMEWORK_SHIM_APPLIED", "Using the offline STruC++-compatible TcGen test-framework shim.", {
         blocking: false,
@@ -95,7 +110,10 @@ export class FrameworkTestBuilder {
       return emptyFrameworkTest(
         diagnostics,
         candidates.map(testBlock => testBlock.name),
-        selected.map(testBlock => testBlock.name)
+        selected.map(testBlock => testBlock.name),
+        targetCoverage.coverage,
+        targetCoverage.assertions,
+        targetCoverage.frameworkTestFiles
       );
     }
 
@@ -111,7 +129,10 @@ export class FrameworkTestBuilder {
       discoveredFrameworkTests: candidates.map(testBlock => testBlock.name),
       selectedFrameworkTests: selected.map(testBlock => testBlock.name),
       generatedTestNames: selected.map(testBlock => frameworkWrapperName(testBlock.name)),
-      coveredExecutableObjects: selected.map(testBlock => testBlock.name)
+      coveredExecutableObjects: selected.map(testBlock => testBlock.name),
+      frameworkTargetCoverage: targetCoverage.coverage,
+      assertions: targetCoverage.assertions,
+      frameworkTestFiles: targetCoverage.frameworkTestFiles
     };
   }
 }
@@ -129,7 +150,10 @@ function frameworkCoreDecision(object: TcGenObject): OmitObjectDecision {
 function emptyFrameworkTest(
   diagnostics: Diagnostic[],
   discoveredFrameworkTests: string[] = [],
-  selectedFrameworkTests: string[] = []
+  selectedFrameworkTests: string[] = [],
+  frameworkTargetCoverage: FrameworkTargetCoverage[] = [],
+  assertions: FrameworkAssertionEvidence[] = [],
+  frameworkTestFiles: SourceFile[] = []
 ): FrameworkTestFile {
   return {
     path: "semantic_framework_tests.st",
@@ -141,7 +165,10 @@ function emptyFrameworkTest(
     discoveredFrameworkTests,
     selectedFrameworkTests,
     generatedTestNames: [],
-    coveredExecutableObjects: []
+    coveredExecutableObjects: [],
+    frameworkTargetCoverage,
+    assertions,
+    frameworkTestFiles
   };
 }
 

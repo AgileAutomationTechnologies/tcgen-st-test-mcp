@@ -132,7 +132,39 @@ export interface TcGenTestSpec {
 export interface FrameworkTestConfig {
   mode: "tcgen-test-framework";
   testFunctionBlocks?: string[];
+  targetMappings: FrameworkTargetMapping[];
   maxScans?: number;
+}
+
+export interface FrameworkTargetMapping {
+  testFunctionBlock: string;
+  productionTarget: string;
+  testSourcePath: string;
+  testSourceSha256: string;
+}
+
+export interface FrameworkTargetCoverage extends FrameworkTargetMapping {
+  assertionCount: number;
+  targetReferenceCount: number;
+  verified: boolean;
+}
+
+export interface FrameworkAssertionEvidence {
+  assertionId: string;
+  testFunctionBlock: string;
+  productionTarget: string;
+  assertionName: string;
+  sourcePath: string;
+  testSourceSha256: string;
+  sourceLine: number;
+  description?: string;
+  targetLinked: boolean;
+  status: "not_run" | "passed" | "failed" | "unknown";
+  executionEvidence:
+    | "not_executed"
+    | "parent_test_passed"
+    | "backend_message"
+    | "parent_test_failed";
 }
 
 export type TestStep =
@@ -164,6 +196,8 @@ export interface SemanticTestReport {
   schemaVersion: 2;
   testMode: SemanticTestMode;
   coveredExecutableObjects: string[];
+  frameworkTargetCoverage: FrameworkTargetCoverage[];
+  assertions: FrameworkAssertionEvidence[];
   generatedTestNames: string[];
   subject: SemanticTestSubject & {
     candidateSha256: string;
@@ -194,6 +228,7 @@ export interface SemanticTestReport {
     normalizedFiles?: NormalizedFile[];
     testFile?: { path: string; content: string };
     generatedTestFile?: { path: string; content: string };
+    frameworkTestFiles?: SourceFile[];
     stdout?: string;
     stderr?: string;
     workspace?: string;

@@ -1,10 +1,14 @@
 {
   "profile": "tcgen-strucpp-v1",
-  "candidateSourcePath": "main.st",
+  "candidateSourcePath": "cut.st",
   "sources": [
     {
       "path": "framework-core.st",
       "content": "FUNCTION_BLOCK ABSTRACT FB_TestCaseBase\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "path": "cut.st",
+      "content": "FUNCTION_BLOCK FB_MainCounter\nVAR_OUTPUT\n    q_nCycles : DINT;\nEND_VAR\nq_nCycles := q_nCycles + 1;\nEND_FUNCTION_BLOCK\n"
     },
     {
       "path": "main.st",
@@ -12,12 +16,20 @@
     },
     {
       "path": "test.st",
-      "content": "FUNCTION_BLOCK FB_Test_ProductionMain EXTENDS FB_TestCaseBase\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'production MAIN remains compiled';\n    _eExecuteState := eTestState_Running;\n    m_xAssertTrue(TRUE, 'framework smoke assertion');\n    _eExecuteState := eTestState_Passed;\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
+      "content": "FUNCTION_BLOCK FB_Test_ProductionMain EXTENDS FB_TestCaseBase\nVAR\n    fbCut : FB_MainCounter;\nEND_VAR\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'production MAIN remains compiled';\n    _eExecuteState := eTestState_Running;\n    fbCut();\n    m_xAssertEqualDint(1, fbCut.q_nCycles, 'candidate FB executes while MAIN remains compiled');\n    _eExecuteState := eTestState_Passed;\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
     }
   ],
   "frameworkTest": {
     "mode": "tcgen-test-framework",
     "testFunctionBlocks": ["FB_Test_ProductionMain"],
+    "targetMappings": [
+      {
+        "testFunctionBlock": "FB_Test_ProductionMain",
+        "productionTarget": "FB_MainCounter",
+        "testSourcePath": "test.st",
+        "testSourceSha256": "eda973ca14ddd2ada4de75ca44093fcfaa83245a607ab70294e70d1e2cd82267"
+      }
+    ],
     "maxScans": 20
   },
   "options": {

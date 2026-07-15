@@ -113,6 +113,14 @@ Framework mode uses:
   "frameworkTest": {
     "mode": "tcgen-test-framework",
     "testFunctionBlocks": ["FB_Test_LimitCounter"],
+    "targetMappings": [
+      {
+        "testFunctionBlock": "FB_Test_LimitCounter",
+        "productionTarget": "FB_LimitCounter",
+        "testSourcePath": "test.st",
+        "testSourceSha256": "<lowercase SHA-256 of the exact test.st content>"
+      }
+    ],
     "maxScans": 200
   }
 }
@@ -122,6 +130,32 @@ When `testFunctionBlocks` is present it must name every discovered submitted
 framework test. To focus a run, submit only the relevant test sources rather
 than selecting an arbitrary passing subset. Reports expose both
 `discoveredFrameworkTests` and `selectedFrameworkTests` for independent checks.
+
+`targetMappings` is mandatory and one-to-one. Every selected `FB_Test_*` and
+every executable object in `candidateSourcePath` must be represented exactly
+once. The MCP verifies the exact source path and UTF-8 content SHA-256, confirms
+that the test source instantiates or references the production target outside
+comments and strings, and requires at least one `m_xAssert*` call over an
+observed value rather than a literal-only smoke assertion. Framework runner
+registration programs and framework infrastructure are not production targets.
+
+Generation keeps the submitted TwinCAT framework ST byte-for-byte in
+`testFile` and `frameworkTestFiles`. The separately generated STruC++ execution
+adapter is returned in `generatedTestFile`; `hashes.testSource` identifies that
+adapter, while each framework source retains its own trusted mapping hash.
+Semantic report v2 publishes the verified identities and structural evidence in
+`frameworkTargetCoverage[]` (`assertionCount`, `targetReferenceCount`, and
+`verified`). Generate and run tool metadata advertise
+`capabilities: ["frameworkTargetCoverageV1"]`.
+
+The additive `assertions[]` field identifies every meaningful submitted
+`m_xAssert*` call by source path, source SHA-256, one-based line, mapped target,
+and stable `assertionId`. Generation reports use `status: "not_run"`. An exact
+passing wrapper qualifies its rows as passed with `parent_test_passed` evidence
+(it does not claim separate per-call instrumentation); a failing wrapper leaves
+rows `unknown` unless its backend message uniquely identifies one submitted
+assertion description. This conservative evidence is part of report v2 and the existing
+`frameworkTargetCoverageV1` capability; report v1 remains unchanged.
 
 In framework mode the MCP normalizes the CUT and agent-authored test FBs and
 replaces uploaded framework infrastructure such as `FB_TestRunner`,

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -151,9 +152,7 @@ describe("failure paths", () => {
     });
   }, 60_000);
 
-  it("fails framework tests that complete without production assertions", async () => {
-    const repo = localStrucppRepo();
-    if (!repo) return;
+  it("blocks framework tests that contain no production assertions", async () => {
     const request = loadRequest("framework-limit-counter");
     const testSource = request.sources.find(source => source.path === "test.st");
     if (!testSource) throw new Error("framework fixture is missing test.st");
@@ -162,16 +161,17 @@ describe("failure paths", () => {
       .filter(line => !line.includes("m_xAssertEqualDint("))
       .join("\n");
 
-    await withEnv({ STRUCPP_PATH: repo }, async () => {
-      const report = (await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>)) as SemanticTestReport;
-      expect(report.verdict).toBe("failed");
-      expect(report.summary.failed).toBe(1);
-      expect(report.tests[0]?.message ?? "").toContain("ASSERT_TRUE failed");
-    });
-  }, 60_000);
+    request.frameworkTest!.targetMappings![0].testSourceSha256 = sha256(testSource.content);
+
+    const report = (await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>)) as SemanticTestReport;
+    expect(report.verdict).toBe("backend_error");
+    expect(report.tests).toEqual([]);
+    expect(report.diagnostics.map(item => item.code)).toContain("TCFRAMEWORK_ASSERTIONS_REQUIRED");
+  });
 
   it("blocks a run whose scope excludes the candidate PROGRAM MAIN", async () => {
     const request = loadRequest("framework-production-main");
+    request.candidateSourcePath = "main.st";
     request.scope = { mode: "entrypoints", entrypoints: ["FB_Test_ProductionMain"] };
     const report = (await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>)) as SemanticTestReport;
     expect(report.verdict).toBe("unsupported");
@@ -184,6 +184,10 @@ describe("failure paths", () => {
   });
 
 });
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
 
 async function rmRetry(path: string): Promise<void> {
   for (let attempt = 0; attempt < 10; attempt++) {

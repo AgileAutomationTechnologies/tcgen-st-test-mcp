@@ -17,10 +17,12 @@ type GenerationReport = {
   schemaVersion: 2;
   testMode: "generated" | "framework";
   coveredExecutableObjects: string[];
+  frameworkTargetCoverage: SemanticTestReport["frameworkTargetCoverage"];
   generatedTestNames: string[];
   subject: SemanticTestReport["subject"];
   testFile: { path: string; content: string };
   generatedTestFile: { path: string; content: string };
+  frameworkTestFiles?: Array<{ path: string; content: string }>;
   hashes: SemanticTestReport["hashes"];
 };
 
@@ -34,6 +36,7 @@ describe("semantic report v2 contract", () => {
       schemaVersion: 2,
       testMode: "generated",
       coveredExecutableObjects: ["FB_Adder"],
+      frameworkTargetCoverage: [],
       generatedTestNames: ["adds two integers"]
     });
     expect(run).toMatchObject({
@@ -60,12 +63,26 @@ describe("semantic report v2 contract", () => {
     expect(generated.generatedTestNames).toEqual(["framework FB_Test_LimitCounter"]);
     expect(generated.coveredExecutableObjects).toEqual(["FB_Test_LimitCounter"]);
     expect(generated.coveredExecutableObjects).not.toContain("FB_LimitCounter");
+    expect(generated.frameworkTargetCoverage).toEqual([
+      expect.objectContaining({
+        testFunctionBlock: "FB_Test_LimitCounter",
+        productionTarget: "FB_LimitCounter",
+        testSourcePath: "test.st",
+        verified: true
+      })
+    ]);
+    expect(generated.testFile).toEqual(generated.frameworkTestFiles?.[0]);
+    expect(generated.generatedTestFile.path).toBe("semantic_framework_tests.st");
+    expect(generated.generatedTestFile).not.toEqual(generated.testFile);
     expect(run.testMode).toBe("framework");
     expect(run.generatedTestNames).toEqual(generated.generatedTestNames);
     expect(run.coveredExecutableObjects).toEqual(generated.coveredExecutableObjects);
+    expect(run.frameworkTargetCoverage).toEqual(generated.frameworkTargetCoverage);
     expect(run.subject).toEqual(generated.subject);
     expect(run.hashes.testSource).toBe(sha256(generated.generatedTestFile.content));
     expect(run.artifacts?.generatedTestFile).toEqual(generated.generatedTestFile);
+    expect(run.artifacts?.testFile).toEqual(generated.testFile);
+    expect(run.artifacts?.frameworkTestFiles).toEqual(generated.frameworkTestFiles);
     expect(validateSemanticReport(run)).toEqual([]);
   });
 
@@ -88,11 +105,15 @@ describe("semantic report v2 contract", () => {
     const {
       testMode: _testMode,
       coveredExecutableObjects: _coveredExecutableObjects,
+      frameworkTargetCoverage: _frameworkTargetCoverage,
+      assertions: _assertions,
       generatedTestNames: _generatedTestNames,
       ...legacyFields
     } = report;
+    const { frameworkTestFiles: _frameworkTestFiles, ...legacyArtifacts } = legacyFields.artifacts ?? {};
     const legacyReport = {
       ...legacyFields,
+      ...(legacyFields.artifacts ? { artifacts: legacyArtifacts } : {}),
       schemaVersion: 1,
       summary: {
         passed: report.summary.passed,
@@ -153,6 +174,7 @@ describe("semantic report v2 contract", () => {
     const metadata = (runTool?.metadata as { tcgen: Record<string, unknown> }).tcgen;
     expect(metadata.contractVersion).toBe(1);
     expect(metadata.semanticReportSchemaVersion).toBe(2);
+    expect(metadata.capabilities).toContain("frameworkTargetCoverageV1");
   });
 });
 

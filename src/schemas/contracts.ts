@@ -179,6 +179,14 @@ export const semanticReportSchema = {
       uniqueItems: true,
       items: { type: "string", minLength: 1 }
     },
+    frameworkTargetCoverage: {
+      type: "array",
+      items: { $ref: "#/$defs/frameworkTargetCoverage" }
+    },
+    assertions: {
+      type: "array",
+      items: { $ref: "#/$defs/frameworkAssertionEvidence" }
+    },
     generatedTestNames: {
       type: "array",
       uniqueItems: true,
@@ -246,6 +254,10 @@ export const semanticReportSchema = {
         },
         testFile: { $ref: "#/$defs/normalizedFile" },
         generatedTestFile: { $ref: "#/$defs/normalizedFile" },
+        frameworkTestFiles: {
+          type: "array",
+          items: { $ref: "#/$defs/normalizedFile" }
+        },
         stdout: { type: "string" },
         stderr: { type: "string" },
         workspace: { type: "string" }
@@ -319,6 +331,59 @@ function commonReportDefs() {
           type: "array",
           uniqueItems: true,
           items: { type: "string", minLength: 1 }
+        }
+      }
+    },
+    frameworkTargetCoverage: {
+      type: "object",
+      required: [
+        "testFunctionBlock",
+        "productionTarget",
+        "testSourcePath",
+        "testSourceSha256",
+        "assertionCount",
+        "targetReferenceCount",
+        "verified"
+      ],
+      additionalProperties: false,
+      properties: {
+        testFunctionBlock: { type: "string", minLength: 1 },
+        productionTarget: { type: "string", minLength: 1 },
+        testSourcePath: { type: "string", minLength: 1 },
+        testSourceSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        assertionCount: { type: "integer", minimum: 0 },
+        targetReferenceCount: { type: "integer", minimum: 0 },
+        verified: { type: "boolean" }
+      }
+    },
+    frameworkAssertionEvidence: {
+      type: "object",
+      required: [
+        "assertionId",
+        "testFunctionBlock",
+        "productionTarget",
+        "assertionName",
+        "sourcePath",
+        "testSourceSha256",
+        "sourceLine",
+        "targetLinked",
+        "status",
+        "executionEvidence"
+      ],
+      additionalProperties: false,
+      properties: {
+        assertionId: { type: "string", pattern: "^assertion:[a-f0-9]{64}$" },
+        testFunctionBlock: { type: "string", minLength: 1 },
+        productionTarget: { type: "string", minLength: 1 },
+        assertionName: { type: "string", pattern: "^m_xAssert[A-Za-z0-9_]*$" },
+        sourcePath: { type: "string", minLength: 1 },
+        testSourceSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        sourceLine: { type: "integer", minimum: 1 },
+        description: { type: "string", maxLength: 1000 },
+        targetLinked: { type: "boolean" },
+        status: { enum: ["not_run", "passed", "failed", "unknown"] },
+        executionEvidence: {
+          enum: ["not_executed", "parent_test_passed", "backend_message", "parent_test_failed"]
         }
       }
     },

@@ -9,8 +9,10 @@ import {
 } from "../domain/reportSanitizer.js";
 import { TcGenToStrucppNormalizer } from "../normalizer/TcGenToStrucppNormalizer.js";
 import { normalizerOptionsForTestRequest, resolveTestFile, TestRequest } from "../testspec/TestFileResolver.js";
+import { applyFrameworkAssertionExecution } from "../testspec/FrameworkAssertionEvidence.js";
 import { WorkspaceManager } from "../workspace/WorkspaceManager.js";
 import { validateNormalizationReport, validateSemanticReport } from "../schemas/validators.js";
+import { packageVersion } from "../version.js";
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
 
@@ -58,12 +60,17 @@ export const toolHandlers: Record<string, ToolHandler> = {
       schemaVersion: 2,
       testMode: generated.mode,
       coveredExecutableObjects: [...generated.coveredExecutableObjects],
+      frameworkTargetCoverage: [...(generated.frameworkTargetCoverage ?? [])],
+      assertions: [...(generated.assertions ?? [])],
       generatedTestNames: [...generated.generatedTestNames],
       subject: subjectForTest(normalizedForReport.subject, generated),
       normalization: normalizedForReport.normalization,
       normalizedFiles: request.options?.includeNormalizedSources === false ? [] : normalizedForReport.normalizedFiles,
-      testFile: { path: generated.path, content: generated.content },
+      testFile: primaryTestArtifact(generated),
       generatedTestFile: { path: generated.path, content: generated.content },
+      ...(generated.frameworkTestFiles?.length
+        ? { frameworkTestFiles: generated.frameworkTestFiles.map(file => ({ ...file })) }
+        : {}),
       diagnostics: [...normalizedForReport.normalization.diagnostics, ...generated.diagnostics],
       hashes
     };
@@ -169,6 +176,9 @@ function buildReport(input: {
     mode: "generated" | "framework";
     generatedTestNames: string[];
     coveredExecutableObjects: string[];
+    frameworkTargetCoverage?: SemanticTestReport["frameworkTargetCoverage"];
+    assertions?: SemanticTestReport["assertions"];
+    frameworkTestFiles?: Array<{ path: string; content: string }>;
     discoveredFrameworkTests?: string[];
     selectedFrameworkTests?: string[];
   };
@@ -183,10 +193,20 @@ function buildReport(input: {
     name: sanitizeCompilerOutput(test.name, input.sanitizationWorkspace),
     ...(test.message === undefined ? {} : { message: sanitizeCompilerOutput(test.message, input.sanitizationWorkspace) })
   }));
+  const assertions = applyFrameworkAssertionExecution(
+    input.testFile.assertions ?? [],
+    tests,
+    input.sanitizationWorkspace
+  );
   const executedTests = tests.filter(test => test.status === "passed" || test.status === "failed").length;
-  const generatedResultMismatch = input.testFile.mode === "generated"
-    ? generatedTestResultMismatch(input.testFile.generatedTestNames, tests)
-    : undefined;
+  // Both the legacy generated DSL and Framework ST emit a deterministic
+  // executable test-name set. A backend result is trustworthy only when every
+  // advertised wrapper ran exactly once; framework target/source coverage does
+  // not make a partial execution acceptable.
+  const generatedResultMismatch = generatedTestResultMismatch(
+    input.testFile.generatedTestNames,
+    tests
+  );
   const completedBackendResultIsIncomplete =
     (input.verdict === "passed" || input.verdict === "failed")
     && (executedTests === 0 || generatedResultMismatch !== undefined);
@@ -236,6 +256,8 @@ function buildReport(input: {
     schemaVersion: 2,
     testMode: input.testFile.mode,
     coveredExecutableObjects: [...input.testFile.coveredExecutableObjects],
+    frameworkTargetCoverage: [...(input.testFile.frameworkTargetCoverage ?? [])],
+    assertions,
     generatedTestNames: [...input.testFile.generatedTestNames],
     subject: subjectForTest(input.normalized.subject, input.testFile),
     verdict,
@@ -264,9 +286,12 @@ function buildReport(input: {
   if (input.includeArtifacts) {
     const artifacts: NonNullable<SemanticTestReport["artifacts"]> = {
       normalizedFiles: input.normalized.normalizedFiles,
-      testFile: { path: input.testFile.path, content: input.testFile.content },
+      testFile: primaryTestArtifact(input.testFile),
       generatedTestFile: { path: input.testFile.path, content: input.testFile.content }
     };
+    if (input.testFile.frameworkTestFiles?.length) {
+      artifacts.frameworkTestFiles = input.testFile.frameworkTestFiles.map(file => ({ ...file }));
+    }
     if (input.backendResult?.stdout !== undefined) artifacts.stdout = sanitizeCompilerOutput(input.backendResult.stdout, input.sanitizationWorkspace);
     if (input.backendResult?.stderr !== undefined) artifacts.stderr = sanitizeCompilerOutput(input.backendResult.stderr, input.sanitizationWorkspace);
     if (input.workspace) artifacts.workspace = input.workspace;
@@ -349,9 +374,15 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
     metadata: {
       tcgen: {
         contractVersion: 1,
-        ...(name === "tcgen_st_test_generate" || name === "tcgen_st_test_run" ? { semanticReportSchemaVersion: 2 } : {}),
+        ...(name === "tcgen_st_test_generate" || name === "tcgen_st_test_run"
+          ? {
+              semanticReportSchemaVersion: 2,
+              capabilities: ["frameworkTargetCoverageV1"]
+            }
+          : {}),
         origin: "pack",
         serverId: "tcgen_st_test",
+        serverVersion: packageVersion,
         childToolName: name,
         capabilityGroup: "build_validation",
         phaseHints: ["validate"],
@@ -363,6 +394,8 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
           "structuredContent.verdict",
           "structuredContent.testMode",
           "structuredContent.coveredExecutableObjects",
+          "structuredContent.frameworkTargetCoverage",
+          "structuredContent.assertions",
           "structuredContent.generatedTestNames",
           "structuredContent.subject.candidateSha256",
           "structuredContent.subject.dependencyBundleSha256",
@@ -428,12 +461,30 @@ function normalizeSchema(requireTestSpec: boolean): Record<string, unknown> {
   if (requireTestSpec) {
     properties.frameworkTest = {
       type: "object",
+      required: ["mode", "targetMappings"],
+      additionalProperties: false,
       properties: {
         mode: { type: "string", enum: ["tcgen-test-framework"] },
         testFunctionBlocks: {
           type: "array",
           items: { type: "string" },
           description: "When provided, must include every discovered submitted FB_Test_* framework test. Focus by omitting unrelated test sources."
+        },
+        targetMappings: {
+          type: "array",
+          minItems: 1,
+          description: "Exact one-to-one bindings from submitted framework tests to candidate executable objects and their source identities.",
+          items: {
+            type: "object",
+            required: ["testFunctionBlock", "productionTarget", "testSourcePath", "testSourceSha256"],
+            additionalProperties: false,
+            properties: {
+              testFunctionBlock: { type: "string", minLength: 1 },
+              productionTarget: { type: "string", minLength: 1 },
+              testSourcePath: { type: "string", minLength: 1 },
+              testSourceSha256: { type: "string", pattern: "^[a-f0-9]{64}$" }
+            }
+          }
         },
         maxScans: { type: "number" }
       }
@@ -445,6 +496,18 @@ function normalizeSchema(requireTestSpec: boolean): Record<string, unknown> {
     additionalProperties: false,
     properties
   };
+}
+
+function primaryTestArtifact(testFile: {
+  path: string;
+  content: string;
+  mode?: "generated" | "framework";
+  frameworkTestFiles?: Array<{ path: string; content: string }>;
+}): { path: string; content: string } {
+  if (testFile.mode === "framework" && testFile.frameworkTestFiles?.length) {
+    return { ...testFile.frameworkTestFiles[0] };
+  }
+  return { path: testFile.path, content: testFile.content };
 }
 
 function sha256(text: string): string {

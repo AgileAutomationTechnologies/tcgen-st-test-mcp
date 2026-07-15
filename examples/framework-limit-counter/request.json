@@ -22,6 +22,14 @@
   "frameworkTest": {
     "mode": "tcgen-test-framework",
     "testFunctionBlocks": ["FB_Test_LimitCounter"],
+    "targetMappings": [
+      {
+        "testFunctionBlock": "FB_Test_LimitCounter",
+        "productionTarget": "FB_LimitCounter",
+        "testSourcePath": "test.st",
+        "testSourceSha256": "2c18485dbbca18b02f6df08baca3f27a9408a1263e87467af8b62d2eaccc580e"
+      }
+    ],
     "maxScans": 20
   },
   "options": {

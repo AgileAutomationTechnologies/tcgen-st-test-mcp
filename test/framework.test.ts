@@ -1,14 +1,54 @@
-import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import { StrucppBackend } from "../src/backends/StrucppBackend.js";
 import { toolHandlers } from "../src/mcp/tools.js";
 import { loadRequest } from "./helpers.js";
 
 describe("framework-style semantic tests", () => {
+  it("fails closed when the backend does not execute the exact framework wrapper", async () => {
+    const run = vi.spyOn(StrucppBackend.prototype, "run").mockResolvedValue({
+      status: "passed",
+      executable: "strucpp-win.exe",
+      cliMode: "native",
+      version: "STruC++ version 0.5.12",
+      stdout: "PASS: stale framework test",
+      stderr: "",
+      exitCode: 0,
+      durationMs: 1,
+      diagnostics: [],
+      tests: [{ name: "stale framework test", status: "passed" }]
+    });
+    try {
+      const report = (await toolHandlers.tcgen_st_test_run(
+        loadRequest("framework-limit-counter") as unknown as Record<string, unknown>
+      )) as {
+        verdict: string;
+        diagnostics: Array<{ code: string }>;
+      };
+
+      expect(report.verdict).toBe("backend_error");
+      expect(report.diagnostics.map(item => item.code)).toContain("STRUCPP_INCOMPLETE_TEST_RESULTS");
+    } finally {
+      run.mockRestore();
+    }
+  });
+
   it("generates an offline framework shim and wrapper test", async () => {
     const result = (await toolHandlers.tcgen_st_test_generate(loadRequest("framework-limit-counter") as unknown as Record<string, unknown>)) as {
       normalization: { status: string; includedObjects: string[]; omittedObjects: string[]; diagnostics: Array<{ code: string }> };
       normalizedFiles: Array<{ path: string; content: string }>;
       testFile: { path: string; content: string };
       generatedTestFile: { path: string; content: string };
+      frameworkTestFiles: Array<{ path: string; content: string }>;
+      frameworkTargetCoverage: Array<{
+        testFunctionBlock: string;
+        productionTarget: string;
+        testSourcePath: string;
+        testSourceSha256: string;
+        assertionCount: number;
+        targetReferenceCount: number;
+        verified: boolean;
+      }>;
       diagnostics: Array<{ code: string }>;
       subject: { discoveredFrameworkTests?: string[]; selectedFrameworkTests?: string[] };
     };
@@ -16,14 +56,27 @@ describe("framework-style semantic tests", () => {
     expect(result.normalization.status).toBe("rewritten");
     expect(result.normalizedFiles[0].path).toBe("tcgen_framework_shim.st");
     expect(result.normalizedFiles[0].content).toContain("FUNCTION_BLOCK FB_TestCaseBase");
-    expect(result.testFile.path).toBe("semantic_framework_tests.st");
-    expect(result.generatedTestFile).toEqual(result.testFile);
-    expect(result.testFile.content).toContain("TEST 'framework FB_Test_LimitCounter'");
-    expect(result.testFile.content).toContain("FOR scan := 1 TO 20 DO");
-    expect(result.testFile.content).toContain("m_xExecute(i_xTrigger := TRUE)");
-    expect(result.testFile.content.match(/m_xExecute\(i_xTrigger := TRUE\)/g)).toHaveLength(1);
-    expect(result.testFile.content).toContain("ASSERT_EQ(result.sErrorMessage, '');");
-    expect(result.testFile.content).toContain("ASSERT_TRUE(result.udiAssertions > 0);");
+    expect(result.testFile.path).toBe("test.st");
+    expect(result.frameworkTestFiles).toEqual([result.testFile]);
+    expect(result.generatedTestFile.path).toBe("semantic_framework_tests.st");
+    expect(result.generatedTestFile).not.toEqual(result.testFile);
+    expect(result.generatedTestFile.content).toContain("TEST 'framework FB_Test_LimitCounter'");
+    expect(result.generatedTestFile.content).toContain("FOR scan := 1 TO 20 DO");
+    expect(result.generatedTestFile.content).toContain("m_xExecute(i_xTrigger := TRUE)");
+    expect(result.generatedTestFile.content.match(/m_xExecute\(i_xTrigger := TRUE\)/g)).toHaveLength(1);
+    expect(result.generatedTestFile.content).toContain("ASSERT_EQ(result.sErrorMessage, '');");
+    expect(result.generatedTestFile.content).toContain("ASSERT_TRUE(result.udiAssertions > 0);");
+    expect(result.frameworkTargetCoverage).toEqual([
+      {
+        testFunctionBlock: "FB_Test_LimitCounter",
+        productionTarget: "FB_LimitCounter",
+        testSourcePath: "test.st",
+        testSourceSha256: sha256(result.testFile.content),
+        assertionCount: 4,
+        targetReferenceCount: 7,
+        verified: true
+      }
+    ]);
     expect(result.subject.selectedFrameworkTests).toEqual(["FB_Test_LimitCounter"]);
     expect(result.subject.discoveredFrameworkTests).toEqual(["FB_Test_LimitCounter"]);
     expect(result.normalization.diagnostics.map(item => item.code)).toContain("TCFRAMEWORK_CORE_REPLACED");
@@ -38,19 +91,19 @@ describe("framework-style semantic tests", () => {
 
   it("discovers framework tests when none are explicitly selected", async () => {
     const request = loadRequest("framework-limit-counter");
-    request.frameworkTest = { mode: "tcgen-test-framework" };
+    request.frameworkTest = { ...request.frameworkTest!, mode: "tcgen-test-framework", testFunctionBlocks: undefined };
     const result = (await toolHandlers.tcgen_st_test_generate(request as unknown as Record<string, unknown>)) as {
-      testFile: { content: string };
+      generatedTestFile: { content: string };
       diagnostics: Array<{ code: string }>;
     };
 
     expect(result.diagnostics.some(item => item.code === "TCFRAMEWORK_TESTS_NOT_FOUND")).toBe(false);
-    expect(result.testFile.content).toContain("framework FB_Test_LimitCounter");
+    expect(result.generatedTestFile.content).toContain("framework FB_Test_LimitCounter");
   });
 
   it("rejects conflicting and missing test authorities", async () => {
     const conflict = loadRequest("adder");
-    conflict.frameworkTest = { mode: "tcgen-test-framework" };
+    conflict.frameworkTest = { mode: "tcgen-test-framework", targetMappings: [] };
     const conflictResult = (await toolHandlers.tcgen_st_test_generate(conflict as unknown as Record<string, unknown>)) as {
       diagnostics: Array<{ code: string }>;
     };
@@ -67,6 +120,7 @@ describe("framework-style semantic tests", () => {
   it("reports missing requested framework tests", async () => {
     const request = loadRequest("framework-limit-counter");
     request.frameworkTest = {
+      ...request.frameworkTest!,
       mode: "tcgen-test-framework",
       testFunctionBlocks: ["FB_Test_Missing"]
     };
@@ -82,18 +136,25 @@ describe("framework-style semantic tests", () => {
     if (!originalTest) throw new Error("framework fixture is missing test.st");
     request.sources.push({
       path: "other-test.st",
-      content: originalTest.content.replaceAll("FB_Test_LimitCounter", "FB_Test_Other")
+      content: originalTest.content
+        .replaceAll("FB_Test_LimitCounter", "FB_Test_Other")
+        .replaceAll("FB_LimitCounter", "FB_Other")
     });
+    const candidate = request.sources.find(source => source.path === "cut.st");
+    if (!candidate) throw new Error("framework fixture is missing cut.st");
+    candidate.content += "\nFUNCTION_BLOCK FB_Other\nVAR_OUTPUT\n    q_nCount : DINT;\nEND_VAR\nq_nCount := q_nCount + 1;\nEND_FUNCTION_BLOCK\n";
 
     const incomplete = (await toolHandlers.tcgen_st_test_generate(request as unknown as Record<string, unknown>)) as {
       subject: { discoveredFrameworkTests?: string[]; selectedFrameworkTests?: string[] };
       testFile: { content: string };
+      generatedTestFile: { content: string };
       diagnostics: Array<{ code: string }>;
     };
     expect(incomplete.diagnostics.map(item => item.code)).toContain("TCFRAMEWORK_TEST_SELECTION_INCOMPLETE");
     expect(incomplete.subject.discoveredFrameworkTests).toEqual(["FB_Test_LimitCounter", "FB_Test_Other"]);
     expect(incomplete.subject.selectedFrameworkTests).toEqual(["FB_Test_LimitCounter"]);
-    expect(incomplete.testFile.content).toBe("");
+    expect(incomplete.testFile.content).toBe(originalTest.content);
+    expect(incomplete.generatedTestFile.content).toBe("");
 
     const blockedRun = (await toolHandlers.tcgen_st_test_run(request as unknown as Record<string, unknown>)) as {
       verdict: string;
@@ -106,15 +167,24 @@ describe("framework-style semantic tests", () => {
 
     request.frameworkTest = {
       mode: "tcgen-test-framework",
-      testFunctionBlocks: ["FB_Test_LimitCounter", "FB_Test_Other"]
+      testFunctionBlocks: ["FB_Test_LimitCounter", "FB_Test_Other"],
+      targetMappings: [
+        ...request.frameworkTest!.targetMappings!,
+        {
+          testFunctionBlock: "FB_Test_Other",
+          productionTarget: "FB_Other",
+          testSourcePath: "other-test.st",
+          testSourceSha256: sha256(request.sources.find(source => source.path === "other-test.st")!.content)
+        }
+      ]
     };
     const complete = (await toolHandlers.tcgen_st_test_generate(request as unknown as Record<string, unknown>)) as {
-      testFile: { content: string };
+      generatedTestFile: { content: string };
       diagnostics: Array<{ code: string }>;
     };
     expect(complete.diagnostics.map(item => item.code)).not.toContain("TCFRAMEWORK_TEST_SELECTION_INCOMPLETE");
-    expect(complete.testFile.content).toContain("framework FB_Test_LimitCounter");
-    expect(complete.testFile.content).toContain("framework FB_Test_Other");
+    expect(complete.generatedTestFile.content).toContain("framework FB_Test_LimitCounter");
+    expect(complete.generatedTestFile.content).toContain("framework FB_Test_Other");
   });
 
   it("keeps a production PROGRAM MAIN in the compiled framework source", async () => {
@@ -144,3 +214,7 @@ describe("framework-style semantic tests", () => {
     expect(result.normalizedFiles.map(file => file.content).join("\n")).toContain("_tcgenOfflineFrameworkRegistrationValidated");
   });
 });
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
