@@ -147,7 +147,11 @@ adapter, while each framework source retains its own trusted mapping hash.
 Semantic report v2 publishes the verified identities and structural evidence in
 `frameworkTargetCoverage[]` (`assertionCount`, `targetReferenceCount`, and
 `verified`). Generate and run tool metadata advertise the
-`frameworkTargetCoverageV1` and `frameworkMultiScanV1` capabilities. The
+`frameworkTargetCoverageV1`, `frameworkMultiScanV1`, and
+`twinCatShortCircuitOperatorsV1` capabilities. The short-circuit capability
+requires the pinned STruC++ distribution to compile TwinCAT `AND_THEN` and
+`OR_ELSE` natively with lazy right-hand-side evaluation; the MCP never rewrites
+them to eager operators. The
 required `tcgen-framework-multiscan-v1` contract calls `m_xExecute(TRUE)` once,
 then calls `m_xExecute(FALSE)` once per offline PLC scan while `m_xIsBusy()`
 remains true. The offline task interval is deterministic: each resumed scan is
