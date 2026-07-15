@@ -217,7 +217,7 @@ the packaged MCP refuses to recursively use itself as Node. Prefer native
 `strucpp-win.exe` in product installations, which needs no external Node.
 
 The v0.7 Windows validation target is the AgileAutomationTechnologies STruC++
-downstream branch at commit `b5becd5da4cc65672ed996874ce3779173458462`,
+downstream branch at commit `5068cdf81ee55a9fcf800845c2798793e94da7df`,
 based on upstream STruC++ `0.5.13` plus the qualified TcGen downstream patch set,
 identified as `0.5.13-tcgen.1`.
 Backend checks and semantic runs fail closed when the detected STruC++ version

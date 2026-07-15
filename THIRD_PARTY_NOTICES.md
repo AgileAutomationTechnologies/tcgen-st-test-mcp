@@ -10,7 +10,7 @@ https://github.com/Autonomy-Logic/STruCpp
 The v0.7 compatibility target is the TcGen STruC++ distribution
 `0.5.13-tcgen.1`, based on upstream STruC++ 0.5.13. The Windows runtime
 slice is pinned to AgileAutomationTechnologies commit
-`b5becd5da4cc65672ed996874ce3779173458462`, including the required
+`5068cdf81ee55a9fcf800845c2798793e94da7df`, including the required
 Windows/compiler-launch and TwinCAT short-circuit fixes.
 
 The installed `backend/libs` directory contains the runtime library assets
