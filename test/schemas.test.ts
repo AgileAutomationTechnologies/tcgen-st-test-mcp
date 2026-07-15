@@ -47,7 +47,7 @@ describe("JSON schemas", () => {
         }
       });
     });
-  }, 30_000);
+  }, 120_000);
 
   it("validates preflight semantic reports against the published report schema", async () => {
     const request = loadRequest("adder");

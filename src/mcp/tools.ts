@@ -414,7 +414,11 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
         ...(name === "tcgen_st_test_generate" || name === "tcgen_st_test_run"
           ? {
               semanticReportSchemaVersion: 2,
-              capabilities: ["frameworkTargetCoverageV1", "frameworkMultiScanV1"]
+              capabilities: [
+                "frameworkTargetCoverageV1",
+                "frameworkMultiScanV1",
+                "twinCatShortCircuitOperatorsV1"
+              ]
             }
           : {}),
         origin: "pack",

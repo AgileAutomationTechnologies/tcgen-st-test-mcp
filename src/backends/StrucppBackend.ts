@@ -43,7 +43,7 @@ type ResolvedBackend = {
   version: string;
 };
 
-const testedVersion = "0.5.12";
+export const testedStrucppVersion = "0.5.13-tcgen.1";
 const developmentMsys2Gpp = "C:\\msys64\\ucrt64\\bin\\g++.exe";
 const bundledStrucppRelativePath = join("backend", "strucpp-win.exe");
 const bundledGppRelativePath = join("toolchain", "mingw64", "bin", "g++.exe");
@@ -69,7 +69,7 @@ export class StrucppBackend {
       return {
         backend: "strucpp",
         available: false,
-        testedVersion,
+        testedVersion: testedStrucppVersion,
         diagnostics:
           diagnostics.length > 0
             ? diagnostics
@@ -85,7 +85,7 @@ export class StrucppBackend {
       argumentsPrefix: backend.command.argsPrefix,
       cliMode: backend.command.mode,
       version: backend.version,
-      testedVersion,
+      testedVersion: testedStrucppVersion,
       gppAvailable: gpp.available,
       gppExecutable: gpp.executable,
       diagnostics
@@ -203,20 +203,26 @@ export class StrucppBackend {
 function validateTestedVersion(version: string | undefined, diagnostics: Diagnostic[]): version is string {
   if (!version) {
     diagnostics.push(
-      diagnostic("error", "STRUCPP_VERSION_UNVERIFIED", `STruC++ ${testedVersion} is required, but the backend version could not be verified.`)
+      diagnostic("error", "STRUCPP_VERSION_UNVERIFIED", `STruC++ ${testedStrucppVersion} is required, but the backend version could not be verified.`)
     );
     return false;
   }
-  const detected = /\b\d+\.\d+\.\d+\b/.exec(version)?.[0];
-  if (detected === testedVersion) return true;
+  const detected = detectStrucppVersion(version);
+  if (detected === testedStrucppVersion) return true;
   diagnostics.push(
     diagnostic(
       "error",
       "STRUCPP_VERSION_MISMATCH",
-      `STruC++ version '${version}' is not accepted; this semantic runner is pinned to ${testedVersion}.`
+      `STruC++ version '${version}' is not accepted; this semantic runner is pinned to ${testedStrucppVersion}.`
     )
   );
   return false;
+}
+
+export function detectStrucppVersion(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return /^(?:STruC\+\+ version )?(\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?)$/
+    .exec(value.trim())?.[1];
 }
 
 async function resolveCompatibleStrucpp(diagnostics: Diagnostic[]): Promise<ResolvedBackend | undefined> {
@@ -226,8 +232,8 @@ async function resolveCompatibleStrucpp(diagnostics: Diagnostic[]): Promise<Reso
     const override = await resolveStrucppPath(explicitPath, overrideDiagnostics);
     if (override) {
       const version = await runVersion(override, overrideDiagnostics);
-      const detected = version && /\b\d+\.\d+\.\d+\b/.exec(version)?.[0];
-      if (detected === testedVersion) {
+      const detected = detectStrucppVersion(version);
+      if (detected === testedStrucppVersion) {
         const overrideIdentity = resolve(override.executable).toLowerCase();
         const overrideGeneration = await semanticRuntimeGeneration(override);
         if (semanticRejectedStrucppOverrides.get(overrideIdentity) !== overrideGeneration) {
@@ -249,7 +255,7 @@ async function resolveCompatibleStrucpp(diagnostics: Diagnostic[]): Promise<Reso
           diagnostic(
             "warning",
             "STRUCPP_OVERRIDE_VERSION_MISMATCH",
-            `Configured STruC++ '${explicitPath}' reports '${version ?? "unknown"}', not ${testedVersion}; falling back to the bundled runtime.`,
+            `Configured STruC++ '${explicitPath}' reports '${version ?? "unknown"}', not ${testedStrucppVersion}; falling back to the bundled runtime.`,
             { blocking: false }
           )
         );
@@ -263,7 +269,7 @@ async function resolveCompatibleStrucpp(diagnostics: Diagnostic[]): Promise<Reso
   if (bundled) return bundled;
 
   if (!explicitPath) {
-    diagnostics.push(diagnostic("error", "STRUCPP_NOT_FOUND", "Bundled STruC++ 0.5.12 is missing. Run TcGen installer Repair."));
+    diagnostics.push(diagnostic("error", "STRUCPP_NOT_FOUND", `Bundled STruC++ ${testedStrucppVersion} is missing. Run TcGen installer Repair.`));
   } else {
     diagnostics.push(diagnostic("error", "STRUCPP_BUNDLED_FALLBACK_MISSING", "The configured STruC++ override is incompatible and the bundled runtime is missing. Run TcGen installer Repair."));
   }
@@ -333,7 +339,7 @@ async function resolveBundledStrucpp(
   const command = nativeCommand(bundledPath, dirname(bundledPath));
   const version = await runVersion(command, diagnostics);
   if (!validateTestedVersion(version, diagnostics)) return undefined;
-  return { command, version: testedVersion };
+  return { command, version: testedStrucppVersion };
 }
 
 async function resolveStrucppPath(explicitPath: string, diagnostics: Diagnostic[]): Promise<ResolvedCommand | undefined> {

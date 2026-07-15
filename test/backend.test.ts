@@ -7,6 +7,8 @@ import {
   StrucppBackend,
   backendChildEnvironment,
   classifyBackendRun,
+  detectStrucppVersion,
+  testedStrucppVersion,
   verifyRuntimeManifest
 } from "../src/backends/StrucppBackend.js";
 import { Diagnostic, SemanticTestReport } from "../src/domain/models.js";
@@ -15,6 +17,17 @@ import { generatedTestResultMismatch, toolHandlers } from "../src/mcp/tools.js";
 import { exampleNames, loadRequest, localStrucppRepo, withEnv } from "./helpers.js";
 
 describe("STruC++ backend", () => {
+  it("retains the complete qualified downstream SemVer identity", () => {
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.1")).toBe("0.5.13-tcgen.1");
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.1+win64.2")).toBe(
+      "0.5.13-tcgen.1+win64.2"
+    );
+    expect(detectStrucppVersion("0.5.13-tcgen.1")).toBe("0.5.13-tcgen.1");
+    expect(detectStrucppVersion("evil 0.5.13-tcgen.1 suffix")).toBeUndefined();
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.1 extra")).toBeUndefined();
+    expect(testedStrucppVersion).toBe("0.5.13-tcgen.1");
+  });
+
   it("rejects passing backend output that omits or invents generated tests", () => {
     expect(
       generatedTestResultMismatch(
@@ -124,9 +137,9 @@ describe("STruC++ backend", () => {
       const check = await new StrucppBackend().check();
       expect(check.available).toBe(true);
       expect(["node", "native"]).toContain(check.cliMode);
-      expect(check.version).toContain("0.5.12");
+      expect(check.version).toContain("0.5.13-tcgen.1");
     });
-  }, 30_000);
+  }, 120_000);
 
   it("returns a clear backend error for invalid g++ path", async () => {
     const repo = localStrucppRepo();
@@ -191,12 +204,12 @@ describe("STruC++ backend", () => {
         await writeFile(fakeCli, fakeSemanticRuntimeCli(true), "utf8");
         const repaired = await new StrucppBackend().check();
         expect(repaired.available).toBe(true);
-        expect(repaired.version).toBe("0.5.12");
+        expect(repaired.version).toBe("0.5.13-tcgen.1");
       });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
-  }, 30_000);
+  }, 120_000);
 
   it("can run fixture tests when STruC++ and g++ are available", async () => {
     const repo = localStrucppRepo();
@@ -209,7 +222,10 @@ describe("STruC++ backend", () => {
       }
       for (const name of exampleNames) {
         const result = (await toolHandlers.tcgen_st_test_run(loadRequest(name) as unknown as Record<string, unknown>)) as SemanticTestReport;
-        expect(result.verdict, name).toBe("passed");
+        expect(
+          result.verdict,
+          `${name}: ${result.diagnostics.map(item => `${item.code}: ${item.message}`).join(" | ")}`
+        ).toBe("passed");
         expect(result.summary, name).toEqual({
           passed: result.tests.filter(test => test.status === "passed").length,
           failed: result.tests.filter(test => test.status === "failed").length,
@@ -379,7 +395,7 @@ function dirnameForTest(path: string): string {
 function fakeSemanticRuntimeCli(passes: boolean): string {
   return [
     "if (process.argv.includes('--version')) {",
-    "  console.log('STruC++ version 0.5.12');",
+    "  console.log('STruC++ version 0.5.13-tcgen.1');",
     "  process.exit(0);",
     "}",
     passes

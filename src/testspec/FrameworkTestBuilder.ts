@@ -277,7 +277,7 @@ function emitWrapperTests(testBlocks: TcGenObject[], maxScans: number): string {
     lines.push(`${instance}.m_xSetup(i_xTrigger := FALSE);`);
     lines.push(`${instance}.m_xExecute(i_xTrigger := TRUE);`);
     lines.push(`tcframework_execute_complete := NOT ${instance}.m_xIsBusy();`);
-    // STruC++ 0.5.12 accepts ADVANCE_TIME only as a top-level TEST statement.
+    // The qualified STruC++ runtime accepts ADVANCE_TIME only as a top-level TEST statement.
     // Emit bounded scan slots rather than nesting it in FOR/IF. Time after an
     // early completion is harmless; the exact test FB is resumed only while
     // it reports busy.

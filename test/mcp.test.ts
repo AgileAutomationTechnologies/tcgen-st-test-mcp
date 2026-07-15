@@ -29,7 +29,8 @@ describe("MCP tool metadata", () => {
       expect(metadata.semanticReportSchemaVersion).toBe(2);
       expect(metadata.capabilities).toContain("frameworkTargetCoverageV1");
       expect(metadata.capabilities).toContain("frameworkMultiScanV1");
-      expect(metadata.serverVersion).toBe("0.6.0");
+      expect(metadata.capabilities).toContain("twinCatShortCircuitOperatorsV1");
+      expect(metadata.serverVersion).toBe("0.7.0");
       expect(metadata.evidencePaths).toEqual(
         expect.arrayContaining([
           "structuredContent.testMode",

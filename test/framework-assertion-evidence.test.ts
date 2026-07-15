@@ -186,7 +186,7 @@ function backendResult(
     executionAttempted: true,
     executable: "strucpp-win.exe",
     cliMode: "native" as const,
-    version: "STruC++ version 0.5.12",
+    version: "STruC++ version 0.5.13-tcgen.1",
     stdout: "",
     stderr: "",
     exitCode: status === "passed" ? 0 : 1,

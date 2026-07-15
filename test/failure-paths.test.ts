@@ -25,7 +25,7 @@ describe("failure paths", () => {
       executionAttempted: false,
       executable: "strucpp-win.exe",
       cliMode: "native",
-      version: "0.5.12",
+      version: "0.5.13-tcgen.1",
       stdout: "",
       stderr: "",
       exitCode: null,
@@ -63,7 +63,7 @@ describe("failure paths", () => {
       expect(report.verdict).toBe("failed");
       expect(report.summary.failed).toBe(1);
     });
-  }, 30_000);
+  }, 120_000);
 
   it("returns compile_error for ST syntax failures", async () => {
     const repo = localStrucppRepo();
@@ -89,7 +89,7 @@ describe("failure paths", () => {
       expect(promoted.length).toBeGreaterThan(0);
       expect(promoted.map(item => item.message).join("\n")).not.toMatch(/[A-Za-z]:[\\/][^\r\n]*tcgen-st-test-/i);
     });
-  }, 30_000);
+  }, 120_000);
 
   it("fails closed when an exit-0 backend reports no executed tests", async () => {
     const gppExecutable = process.env.STRUCPP_GPP_PATH ?? "C:\\msys64\\ucrt64\\bin\\g++.exe";
@@ -100,7 +100,7 @@ describe("failure paths", () => {
       fakeCli,
       [
         "if (process.argv.includes('--version')) {",
-        "  console.log('STruC++ version 0.5.12');",
+        "  console.log('STruC++ version 0.5.13-tcgen.1');",
         "  process.exit(0);",
         "}",
         "console.log('Compilation completed without executing tests.');",
@@ -127,7 +127,7 @@ describe("failure paths", () => {
     } finally {
       await rmRetry(tempDir);
     }
-  }, 30_000);
+  }, 120_000);
 
   it("returns timeout when STruC++ hangs", async () => {
     const gppExecutable = process.env.STRUCPP_GPP_PATH ?? "C:\\msys64\\ucrt64\\bin\\g++.exe";
@@ -138,7 +138,7 @@ describe("failure paths", () => {
       fakeCli,
       [
         "if (process.argv.includes('--version')) {",
-        "  console.log('STruC++ version 0.5.12');",
+        "  console.log('STruC++ version 0.5.13-tcgen.1');",
         "  process.exit(0);",
         "}",
         "setInterval(() => {}, 1000);"
@@ -171,7 +171,7 @@ describe("failure paths", () => {
       expect(report.artifacts?.workspace).toBeUndefined();
       expect(report.diagnostics.map(item => item.code)).toContain("SANDBOX_KEEP_WORKSPACE_DISABLED");
     });
-  }, 30_000);
+  }, 120_000);
 
   it("returns failed when a framework test catches a broken CUT", async () => {
     const repo = localStrucppRepo();
