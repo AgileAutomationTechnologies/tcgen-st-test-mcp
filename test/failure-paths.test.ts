@@ -3,7 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { StrucppBackend } from "../src/backends/StrucppBackend.js";
 import { SemanticTestReport } from "../src/domain/models.js";
 import { toolHandlers } from "../src/mcp/tools.js";
 import { loadRequest, loadTestFixture, localStrucppRepo, withEnv } from "./helpers.js";
@@ -13,8 +14,40 @@ describe("failure paths", () => {
     await withEnv({ STRUCPP_PATH: resolve("missing-strucpp.exe"), STRUCPP_GPP_PATH: process.execPath }, async () => {
       const report = (await toolHandlers.tcgen_st_test_run(loadRequest("adder") as unknown as Record<string, unknown>)) as SemanticTestReport;
       expect(report.verdict).toBe("backend_error");
+      expect(report.backend.executionAttempted).toBe(false);
       expect(report.summary.runtimeErrors).toBe(1);
     });
+  });
+
+  it("does not publish a backend version before execution is attempted", async () => {
+    const backend = vi.spyOn(StrucppBackend.prototype, "run").mockResolvedValue({
+      status: "backend_error",
+      executionAttempted: false,
+      executable: "strucpp-win.exe",
+      cliMode: "native",
+      version: "0.5.12",
+      stdout: "",
+      stderr: "",
+      exitCode: null,
+      durationMs: 0,
+      diagnostics: [{
+        severity: "error",
+        blocking: true,
+        code: "RUNTIME_INTEGRITY_FAILED",
+        message: "Virtual Tests runtime failed integrity verification."
+      }],
+      tests: []
+    });
+    try {
+      const report = (await toolHandlers.tcgen_st_test_run(
+        loadRequest("adder") as unknown as Record<string, unknown>
+      )) as SemanticTestReport;
+
+      expect(report.backend.executionAttempted).toBe(false);
+      expect(report.backend.version).toBeUndefined();
+    } finally {
+      backend.mockRestore();
+    }
   });
 
   it("returns failed for assertion failures", async () => {

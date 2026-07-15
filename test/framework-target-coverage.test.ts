@@ -337,6 +337,7 @@ describe("trusted framework target coverage", () => {
     ];
     request.frameworkTest = {
       mode: "tcgen-test-framework",
+      executionContract: "tcgen-framework-multiscan-v1",
       testFunctionBlocks: ["FB_Test_LimitCounter", "FB_Test_EnableLatch"],
       targetMappings: [
         {

@@ -23,6 +23,7 @@ export type SemanticVerdict =
   | "backend_error"
   | "timeout";
 export type SemanticTestMode = "generated" | "framework";
+export type FrameworkExecutionContract = "tcgen-framework-multiscan-v1";
 
 export interface SourceSpan {
   path: string;
@@ -131,6 +132,7 @@ export interface TcGenTestSpec {
 
 export interface FrameworkTestConfig {
   mode: "tcgen-test-framework";
+  executionContract: FrameworkExecutionContract;
   testFunctionBlocks?: string[];
   targetMappings: FrameworkTargetMapping[];
   maxScans?: number;
@@ -206,6 +208,7 @@ export interface SemanticTestReport {
   verdict: SemanticVerdict;
   backend: {
     name: "strucpp";
+    executionAttempted: boolean;
     version?: string;
     executable?: string;
     cliMode?: "native" | "node";

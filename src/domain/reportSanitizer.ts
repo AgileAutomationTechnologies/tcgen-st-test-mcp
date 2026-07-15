@@ -1,5 +1,6 @@
 import { tmpdir } from "node:os";
 import { Diagnostic, SemanticVerdict, diagnostic } from "./models.js";
+import type { NormalizedSourceMapEntry } from "../normalizer/TcGenToStrucppNormalizer.js";
 
 const ansiEscape = /\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])/g;
 const unsafeControlCharacters = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
@@ -31,7 +32,8 @@ export function sanitizeCompilerDiagnostics(diagnostics: Diagnostic[], workspace
 export function structuredCompilerOutputDiagnostics(
   verdict: SemanticVerdict,
   output: { stdout: string; stderr: string },
-  workspace?: string
+  workspace?: string,
+  sourceMap: readonly NormalizedSourceMapEntry[] = []
 ): Diagnostic[] {
   if (verdict === "passed" || verdict === "partial" || verdict === "unsupported") return [];
 
@@ -41,12 +43,17 @@ export function structuredCompilerOutputDiagnostics(
   for (const channel of ["stderr", "stdout"] as const) {
     const sanitized = truncateDiagnosticText(sanitizeCompilerOutput(output[channel], workspace).trim());
     if (!sanitized) continue;
+    const provenance = compilerDiagnosticProvenance(verdict, sanitized, sourceMap);
     diagnostics.push(
       diagnostic(
         "error",
         `STRUCPP_${category}_${channel.toUpperCase()}`,
         `STruC++ ${label} ${channel}:\n${sanitized}`,
-        { sourceKind: compilerDiagnosticSourceKind(verdict, sanitized) }
+        {
+          sourceKind: provenance.sourceKind,
+          ...(provenance.original ? { original: provenance.original } : {}),
+          ...(provenance.object ? { object: provenance.object } : {})
+        }
       )
     );
   }
@@ -55,20 +62,66 @@ export function structuredCompilerOutputDiagnostics(
 
 export function compilerDiagnosticSourceKind(
   verdict: SemanticVerdict,
-  sanitizedOutput: string
+  sanitizedOutput: string,
+  sourceMap: readonly NormalizedSourceMapEntry[] = []
 ): NonNullable<Diagnostic["sourceKind"]> {
-  if (verdict === "backend_error" || verdict === "timeout") return "backend";
-  if (verdict !== "compile_error") return "candidate";
+  return compilerDiagnosticProvenance(verdict, sanitizedOutput, sourceMap).sourceKind;
+}
+
+function compilerDiagnosticProvenance(
+  verdict: SemanticVerdict,
+  sanitizedOutput: string,
+  sourceMap: readonly NormalizedSourceMapEntry[]
+): {
+  sourceKind: NonNullable<Diagnostic["sourceKind"]>;
+  original?: Diagnostic["original"];
+  object?: string;
+} {
+  if (verdict === "backend_error" || verdict === "timeout") return { sourceKind: "backend" };
+  if (verdict === "failed" && /\btcframework_execute_complete\b/i.test(sanitizedOutput)) {
+    return { sourceKind: "generated_test_harness" };
+  }
+  if (verdict !== "compile_error") return { sourceKind: "candidate" };
+
+  const mapped = normalizedSourceReferences(sanitizedOutput)
+    .map(reference => sourceMap.find(entry =>
+      entry.generatedPath.toLowerCase() === reference.path.toLowerCase()
+      && reference.line >= entry.generatedStartLine
+      && reference.line <= entry.generatedEndLine
+    ))
+    .filter((entry): entry is NormalizedSourceMapEntry => entry !== undefined);
+  if (mapped.length > 0) {
+    const kinds = new Set(mapped.map(entry => entry.sourceKind));
+    if (kinds.size > 1) return { sourceKind: "mixed" };
+    const first = mapped[0];
+    return {
+      sourceKind: first.sourceKind,
+      original: { ...first.original },
+      object: first.object
+    };
+  }
 
   // STruC++ emits generated test expressions into test_main.cpp while the
   // compiled production/dependency model is emitted into generated.cpp.
   // ST-front-end diagnostics retain the normalized/test source filename.
-  const harness = /(?:^|[\\/\s:<])(?:test_main\.cpp|semantic_(?:framework_)?tests\.st)(?=[:\s>]|$)/i.test(sanitizedOutput);
+  const harness = /(?:^|[\\/\s:<])(?:test_main\.cpp|semantic_(?:framework_)?tests\.st|tcgen_framework_shim\.st)(?=[:\s>]|$)/i.test(sanitizedOutput);
   const candidate = /(?:^|[\\/\s:<])(?:generated\.cpp|normalized\.st)(?=[:\s>]|$)/i.test(sanitizedOutput);
-  if (harness && candidate) return "mixed";
-  if (harness) return "generated_test_harness";
-  if (candidate) return "candidate";
-  return "unknown";
+  if (harness && candidate) return { sourceKind: "mixed" };
+  if (harness) return { sourceKind: "generated_test_harness" };
+  if (candidate) return { sourceKind: "candidate" };
+  return { sourceKind: "unknown" };
+}
+
+function normalizedSourceReferences(value: string): Array<{ path: string; line: number }> {
+  const references: Array<{ path: string; line: number }> = [];
+  const expression = /(?:^|[\\/\s:<])(?<path>normalized\.st)(?::|\()(?<line>\d+)(?::\d+|,\d+\))?/gim;
+  for (const match of value.matchAll(expression)) {
+    const line = Number(match.groups?.line);
+    if (match.groups?.path && Number.isInteger(line) && line > 0) {
+      references.push({ path: match.groups.path, line });
+    }
+  }
+  return references;
 }
 
 function pathSpellings(path: string): string[] {

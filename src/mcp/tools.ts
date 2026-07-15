@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { StrucppBackend } from "../backends/StrucppBackend.js";
+import { BackendRunResult, StrucppBackend } from "../backends/StrucppBackend.js";
 import { NormalizeRequest, SemanticTestReport, SemanticTestSubject, diagnostic } from "../domain/models.js";
 import {
   sanitizeCompilerDiagnostics,
@@ -63,6 +63,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
       frameworkTargetCoverage: [...(generated.frameworkTargetCoverage ?? [])],
       assertions: [...(generated.assertions ?? [])],
       generatedTestNames: [...generated.generatedTestNames],
+      ...(generated.executionContract ? { executionContract: generated.executionContract } : {}),
       subject: subjectForTest(normalizedForReport.subject, generated),
       normalization: normalizedForReport.normalization,
       normalizedFiles: request.options?.includeNormalizedSources === false ? [] : normalizedForReport.normalizedFiles,
@@ -183,7 +184,7 @@ function buildReport(input: {
     selectedFrameworkTests?: string[];
   };
   diagnostics: SemanticTestReport["diagnostics"];
-  backendResult?: { executable?: string; version?: string; cliMode?: "native" | "node"; gppExecutable?: string; stdout: string; stderr: string; tests: SemanticTestReport["tests"] };
+  backendResult?: BackendRunResult;
   includeArtifacts?: boolean;
   sanitizationWorkspace?: string;
   workspace?: string;
@@ -212,9 +213,12 @@ function buildReport(input: {
     && (executedTests === 0 || generatedResultMismatch !== undefined);
   const backendVerdict = completedBackendResultIsIncomplete ? "backend_error" : input.verdict;
   const verdict = input.normalized.normalization.status === "partial" && backendVerdict === "passed" ? "partial" : backendVerdict;
-  const backend: SemanticTestReport["backend"] = { name: "strucpp" };
+  const backend: SemanticTestReport["backend"] = {
+    name: "strucpp",
+    executionAttempted: input.backendResult?.executionAttempted === true
+  };
   if (input.backendResult?.executable) backend.executable = input.backendResult.executable;
-  if (input.backendResult?.version) backend.version = input.backendResult.version;
+  if (backend.executionAttempted && input.backendResult?.version) backend.version = input.backendResult.version;
   if (input.backendResult?.cliMode) backend.cliMode = input.backendResult.cliMode;
   if (input.backendResult?.gppExecutable) backend.gppExecutable = input.backendResult.gppExecutable;
   const testSource = input.testFile.hash || sha256(input.testFile.content);
@@ -248,7 +252,26 @@ function buildReport(input: {
   }
   if (input.backendResult) {
     sanitizedDiagnostics.push(
-      ...structuredCompilerOutputDiagnostics(verdict, input.backendResult, input.sanitizationWorkspace)
+      ...structuredCompilerOutputDiagnostics(
+        verdict,
+        input.backendResult,
+        input.sanitizationWorkspace,
+        input.normalized.sourceMap
+      )
+    );
+  }
+  const incompleteFrameworkExecution = frameworkExecutionIncomplete(input.testFile.mode, tests, input.backendResult);
+  if (incompleteFrameworkExecution && !sanitizedDiagnostics.some(item => item.code === "TCFRAMEWORK_EXECUTE_INCOMPLETE")) {
+    sanitizedDiagnostics.push(
+      diagnostic(
+        "error",
+        "TCFRAMEWORK_EXECUTE_INCOMPLETE",
+        "The Framework execute phase remained busy after the configured offline scan limit. The exact test must initialize on m_xExecute(TRUE), advance one scan on each m_xExecute(FALSE), and clear _xPhaseBusy on every terminal path.",
+        {
+          sourceKind: "generated_test_harness",
+          suggestion: "Repair the Framework ST execute-phase state machine; production code was not identified as the cause."
+        }
+      )
     );
   }
 
@@ -333,6 +356,20 @@ export function generatedTestResultMismatch(
     + ").";
 }
 
+function frameworkExecutionIncomplete(
+  mode: "generated" | "framework",
+  tests: readonly SemanticTestReport["tests"][number][],
+  backendResult: BackendRunResult | undefined
+): boolean {
+  if (mode !== "framework" || backendResult?.executionAttempted !== true) return false;
+  const output = [
+    backendResult.stdout,
+    backendResult.stderr,
+    ...tests.filter(test => test.status === "failed").map(test => test.message ?? "")
+  ].join("\n");
+  return /\btcframework_execute_complete\b/i.test(output);
+}
+
 function nameCounts(values: readonly string[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
@@ -377,7 +414,7 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
         ...(name === "tcgen_st_test_generate" || name === "tcgen_st_test_run"
           ? {
               semanticReportSchemaVersion: 2,
-              capabilities: ["frameworkTargetCoverageV1"]
+              capabilities: ["frameworkTargetCoverageV1", "frameworkMultiScanV1"]
             }
           : {}),
         origin: "pack",
@@ -397,6 +434,7 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
           "structuredContent.frameworkTargetCoverage",
           "structuredContent.assertions",
           "structuredContent.generatedTestNames",
+          "structuredContent.backend.executionAttempted",
           "structuredContent.subject.candidateSha256",
           "structuredContent.subject.dependencyBundleSha256",
           "structuredContent.subject.discoveredFrameworkTests",
@@ -461,10 +499,11 @@ function normalizeSchema(requireTestSpec: boolean): Record<string, unknown> {
   if (requireTestSpec) {
     properties.frameworkTest = {
       type: "object",
-      required: ["mode", "targetMappings"],
+      required: ["mode", "executionContract", "targetMappings"],
       additionalProperties: false,
       properties: {
         mode: { type: "string", enum: ["tcgen-test-framework"] },
+        executionContract: { type: "string", const: "tcgen-framework-multiscan-v1" },
         testFunctionBlocks: {
           type: "array",
           items: { type: "string" },

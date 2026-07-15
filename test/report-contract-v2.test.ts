@@ -50,6 +50,7 @@ describe("semantic report v2 contract", () => {
     expect(generated.hashes.testSource).toBe(sha256(generated.generatedTestFile.content));
     expect(run.artifacts?.generatedTestFile).toEqual(generated.generatedTestFile);
     expect(run.artifacts?.testFile).toEqual(generated.testFile);
+    expect(run.backend.executionAttempted).toBe(false);
     expect(validateSemanticReport(run)).toEqual([]);
     expect(validatePublishedSchema("schemas/semantic-report.schema.json", run)).toBe(true);
   });
@@ -111,8 +112,10 @@ describe("semantic report v2 contract", () => {
       ...legacyFields
     } = report;
     const { frameworkTestFiles: _frameworkTestFiles, ...legacyArtifacts } = legacyFields.artifacts ?? {};
+    const { executionAttempted: _executionAttempted, ...legacyBackend } = legacyFields.backend;
     const legacyReport = {
       ...legacyFields,
+      backend: legacyBackend,
       ...(legacyFields.artifacts ? { artifacts: legacyArtifacts } : {}),
       schemaVersion: 1,
       summary: {
@@ -126,6 +129,17 @@ describe("semantic report v2 contract", () => {
 
     expect(validatePublishedSchema("schemas/semantic-report-v1.schema.json", legacyReport)).toBe(true);
     expect(validatePublishedSchema("schemas/semantic-report.schema.json", legacyReport)).toBe(false);
+  });
+
+  it("keeps executionAttempted additive for stored schema-v2 reports", async () => {
+    const report = await unavailableBackendRun(loadRequest("adder") as unknown as Record<string, unknown>);
+    const legacyBackend = { ...report.backend } as Partial<SemanticTestReport["backend"]>;
+    delete legacyBackend.executionAttempted;
+
+    expect(validatePublishedSchema("schemas/semantic-report.schema.json", {
+      ...report,
+      backend: legacyBackend
+    })).toBe(true);
   });
 
   it("sanitizes compiler output, assertion details, and diagnostic text", () => {
@@ -175,6 +189,7 @@ describe("semantic report v2 contract", () => {
     expect(metadata.contractVersion).toBe(1);
     expect(metadata.semanticReportSchemaVersion).toBe(2);
     expect(metadata.capabilities).toContain("frameworkTargetCoverageV1");
+    expect(metadata.capabilities).toContain("frameworkMultiScanV1");
   });
 });
 

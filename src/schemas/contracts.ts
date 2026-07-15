@@ -205,6 +205,7 @@ export const semanticReportSchema = {
       additionalProperties: false,
       properties: {
         name: { const: "strucpp" },
+        executionAttempted: { type: "boolean" },
         version: { type: "string" },
         executable: { type: "string" },
         cliMode: { enum: ["native", "node"] },

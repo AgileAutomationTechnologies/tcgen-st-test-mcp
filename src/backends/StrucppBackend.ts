@@ -9,6 +9,7 @@ import { sanitizeCompilerOutput } from "../domain/reportSanitizer.js";
 
 export interface BackendRunResult {
   status: "passed" | "failed" | "compile_error" | "backend_error" | "timeout";
+  executionAttempted: boolean;
   executable?: string;
   command?: string;
   argumentsPrefix?: string[];
@@ -100,6 +101,7 @@ export class StrucppBackend {
     if (!backend) {
       return {
         status: "backend_error",
+        executionAttempted: false,
         stdout: "",
         stderr: "",
         exitCode: null,
@@ -115,6 +117,7 @@ export class StrucppBackend {
     if (!runtimeIntegrity) {
       return {
         status: "backend_error",
+        executionAttempted: false,
         executable: backend.command.executable,
         command: backend.command.command,
         argumentsPrefix: backend.command.argsPrefix,
@@ -131,6 +134,7 @@ export class StrucppBackend {
     if (!gpp.available || !gpp.executable) {
       return {
         status: "backend_error",
+        executionAttempted: false,
         executable: backend.command.executable,
         command: backend.command.command,
         argumentsPrefix: backend.command.argsPrefix,
@@ -154,6 +158,7 @@ export class StrucppBackend {
       diagnostics.push(diagnostic("error", "SANDBOX_TIMEOUT", `STruC++ timed out after ${timeoutMs} ms.`));
       return {
         status: "timeout",
+        executionAttempted: true,
         executable: backend.command.executable,
         command: backend.command.command,
         argumentsPrefix: backend.command.argsPrefix,
@@ -180,6 +185,7 @@ export class StrucppBackend {
     }
     return {
       status,
+      executionAttempted: true,
       executable: backend.command.executable,
       command: backend.command.command,
       argumentsPrefix: backend.command.argsPrefix,

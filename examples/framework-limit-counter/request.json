@@ -12,7 +12,7 @@
     },
     {
       "path": "test.st",
-      "content": "FUNCTION_BLOCK FB_Test_LimitCounter EXTENDS FB_TestCaseBase\nVAR\n    fbCut : FB_LimitCounter;\n    nScan : DINT;\nEND_VAR\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'FB_LimitCounter clamps at max';\n    _eExecuteState := eTestState_Running;\n    nScan := 0;\n    fbCut(i_xReset := TRUE, i_xEnable := FALSE, i_nLimit := 3);\n    _xPhaseBusy := TRUE;\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\n\nMETHOD PUBLIC m_xIsBusy : BOOL\nIF _xPhaseBusy THEN\n    nScan := nScan + 1;\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    IF nScan = 1 THEN\n        m_xAssertEqualDint(1, fbCut.q_nCount, 'first count should be 1');\n    ELSIF nScan = 2 THEN\n        m_xAssertEqualDint(2, fbCut.q_nCount, 'second count should be 2');\n    ELSE\n        m_xAssertEqualDint(3, fbCut.q_nCount, 'third count should be 3');\n        fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n        m_xAssertEqualDint(3, fbCut.q_nCount, 'counter should clamp at limit');\n        _eExecuteState := eTestState_Passed;\n        _xPhaseBusy := FALSE;\n    END_IF\nEND_IF\nm_xIsBusy := _xPhaseBusy;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
+      "content": "FUNCTION_BLOCK FB_Test_LimitCounter EXTENDS FB_TestCaseBase\nVAR\n    fbCut : FB_LimitCounter;\n    nScan : DINT;\nEND_VAR\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'FB_LimitCounter clamps at max';\n    _eExecuteState := eTestState_Running;\n    nScan := 0;\n    fbCut(i_xReset := TRUE, i_xEnable := FALSE, i_nLimit := 3);\n    _xPhaseBusy := TRUE;\nELSIF _xPhaseBusy THEN\n    nScan := nScan + 1;\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    IF nScan = 1 THEN\n        m_xAssertEqualDint(1, fbCut.q_nCount, 'first count should be 1');\n    ELSIF nScan = 2 THEN\n        m_xAssertEqualDint(2, fbCut.q_nCount, 'second count should be 2');\n    ELSIF nScan = 3 THEN\n        m_xAssertEqualDint(3, fbCut.q_nCount, 'third count should be 3');\n    ELSE\n        m_xAssertEqualDint(3, fbCut.q_nCount, 'counter should clamp at limit');\n        _eExecuteState := eTestState_Passed;\n        _xPhaseBusy := FALSE;\n    END_IF\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\n\nMETHOD PUBLIC m_xIsBusy : BOOL\nm_xIsBusy := _xPhaseBusy;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
     },
     {
       "path": "main.st",
@@ -21,13 +21,14 @@
   ],
   "frameworkTest": {
     "mode": "tcgen-test-framework",
+    "executionContract": "tcgen-framework-multiscan-v1",
     "testFunctionBlocks": ["FB_Test_LimitCounter"],
     "targetMappings": [
       {
         "testFunctionBlock": "FB_Test_LimitCounter",
         "productionTarget": "FB_LimitCounter",
         "testSourcePath": "test.st",
-        "testSourceSha256": "2c18485dbbca18b02f6df08baca3f27a9408a1263e87467af8b62d2eaccc580e"
+        "testSourceSha256": "4f30a1d6a2db69b97086656e32aed230c3f30ca9b22df69f409ebe2906b2d23e"
       }
     ],
     "maxScans": 20

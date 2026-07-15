@@ -144,6 +144,7 @@ describe("Framework assertion evidence", () => {
     const aggregateHash = sha256(testSource.content);
     request.frameworkTest = {
       mode: "tcgen-test-framework",
+      executionContract: "tcgen-framework-multiscan-v1",
       testFunctionBlocks: ["FB_Test_LimitCounter", "FB_Test_Other"],
       targetMappings: [
         {
@@ -182,6 +183,7 @@ function backendResult(
 ) {
   return {
     status,
+    executionAttempted: true,
     executable: "strucpp-win.exe",
     cliMode: "native" as const,
     version: "STruC++ version 0.5.12",

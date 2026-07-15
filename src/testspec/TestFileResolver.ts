@@ -1,6 +1,7 @@
 import {
   Diagnostic,
   FrameworkAssertionEvidence,
+  FrameworkExecutionContract,
   FrameworkTestConfig,
   FrameworkTargetCoverage,
   NormalizeRequest,
@@ -26,6 +27,7 @@ export interface ResolvedTestFile extends GeneratedTestFile {
   frameworkTargetCoverage?: FrameworkTargetCoverage[];
   assertions?: FrameworkAssertionEvidence[];
   frameworkTestFiles?: SourceFile[];
+  executionContract?: FrameworkExecutionContract;
 }
 
 export function normalizerOptionsForTestRequest(request: TestRequest): NormalizeRuntimeOptions {

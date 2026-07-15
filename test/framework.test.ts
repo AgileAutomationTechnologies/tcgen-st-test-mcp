@@ -8,6 +8,7 @@ describe("framework-style semantic tests", () => {
   it("fails closed when the backend does not execute the exact framework wrapper", async () => {
     const run = vi.spyOn(StrucppBackend.prototype, "run").mockResolvedValue({
       status: "passed",
+      executionAttempted: true,
       executable: "strucpp-win.exe",
       cliMode: "native",
       version: "STruC++ version 0.5.12",
@@ -51,6 +52,7 @@ describe("framework-style semantic tests", () => {
       }>;
       diagnostics: Array<{ code: string }>;
       subject: { discoveredFrameworkTests?: string[]; selectedFrameworkTests?: string[] };
+      executionContract?: string;
     };
 
     expect(result.normalization.status).toBe("rewritten");
@@ -58,12 +60,23 @@ describe("framework-style semantic tests", () => {
     expect(result.normalizedFiles[0].content).toContain("FUNCTION_BLOCK FB_TestCaseBase");
     expect(result.testFile.path).toBe("test.st");
     expect(result.frameworkTestFiles).toEqual([result.testFile]);
+    expect(result.frameworkTestFiles[0].content).toBe(
+      loadRequest("framework-limit-counter").sources.find(source => source.path === "test.st")?.content
+    );
     expect(result.generatedTestFile.path).toBe("semantic_framework_tests.st");
     expect(result.generatedTestFile).not.toEqual(result.testFile);
     expect(result.generatedTestFile.content).toContain("TEST 'framework FB_Test_LimitCounter'");
-    expect(result.generatedTestFile.content).toContain("FOR scan := 1 TO 20 DO");
+    expect(result.generatedTestFile.content.match(/ADVANCE_TIME\(1000000\)/g)).toHaveLength(20);
     expect(result.generatedTestFile.content).toContain("m_xExecute(i_xTrigger := TRUE)");
     expect(result.generatedTestFile.content.match(/m_xExecute\(i_xTrigger := TRUE\)/g)).toHaveLength(1);
+    expect(result.generatedTestFile.content).toContain("m_xExecute(i_xTrigger := FALSE)");
+    expect(result.generatedTestFile.content.match(/m_xExecute\(i_xTrigger := FALSE\)/g)).toHaveLength(20);
+    expect(result.generatedTestFile.content.indexOf("ADVANCE_TIME(1000000)"))
+      .toBeLessThan(result.generatedTestFile.content.indexOf("m_xExecute(i_xTrigger := FALSE)"));
+    expect(result.generatedTestFile.content.indexOf("m_xExecute(i_xTrigger := FALSE)"))
+      .toBeLessThan(result.generatedTestFile.content.indexOf("m_xIsBusy()", result.generatedTestFile.content.indexOf("ADVANCE_TIME")));
+    expect(result.generatedTestFile.content).toContain("ASSERT_TRUE(tcframework_execute_complete);");
+    expect(result.executionContract).toBe("tcgen-framework-multiscan-v1");
     expect(result.generatedTestFile.content).toContain("ASSERT_EQ(result.sErrorMessage, '');");
     expect(result.generatedTestFile.content).toContain("ASSERT_TRUE(result.udiAssertions > 0);");
     expect(result.frameworkTargetCoverage).toEqual([
@@ -73,7 +86,7 @@ describe("framework-style semantic tests", () => {
         testSourcePath: "test.st",
         testSourceSha256: sha256(result.testFile.content),
         assertionCount: 4,
-        targetReferenceCount: 7,
+        targetReferenceCount: 6,
         verified: true
       }
     ]);
@@ -103,7 +116,11 @@ describe("framework-style semantic tests", () => {
 
   it("rejects conflicting and missing test authorities", async () => {
     const conflict = loadRequest("adder");
-    conflict.frameworkTest = { mode: "tcgen-test-framework", targetMappings: [] };
+    conflict.frameworkTest = {
+      mode: "tcgen-test-framework",
+      executionContract: "tcgen-framework-multiscan-v1",
+      targetMappings: []
+    };
     const conflictResult = (await toolHandlers.tcgen_st_test_generate(conflict as unknown as Record<string, unknown>)) as {
       diagnostics: Array<{ code: string }>;
     };
@@ -167,6 +184,7 @@ describe("framework-style semantic tests", () => {
 
     request.frameworkTest = {
       mode: "tcgen-test-framework",
+      executionContract: "tcgen-framework-multiscan-v1",
       testFunctionBlocks: ["FB_Test_LimitCounter", "FB_Test_Other"],
       targetMappings: [
         ...request.frameworkTest!.targetMappings!,

@@ -19,7 +19,17 @@ export interface NormalizeResult {
   subject: SemanticTestSubject;
   normalization: NormalizationSummary;
   normalizedFiles: NormalizedFile[];
+  sourceMap: NormalizedSourceMapEntry[];
   hashes: { request: string; normalizedSource?: string };
+}
+
+export interface NormalizedSourceMapEntry {
+  generatedPath: string;
+  generatedStartLine: number;
+  generatedEndLine: number;
+  original: TcGenObject["sourceSpan"];
+  object: string;
+  sourceKind: "generated_test_harness" | "candidate";
 }
 
 export interface OmitObjectDecision {
@@ -36,6 +46,7 @@ export interface ReplaceObjectDecision {
   message: string;
   severity?: Diagnostic["severity"];
   ruleId: string;
+  sourceKind?: NormalizedSourceMapEntry["sourceKind"];
 }
 
 export interface NormalizeRuntimeOptions {
@@ -111,6 +122,7 @@ export class TcGenToStrucppNormalizer {
         diagnostics
       },
       normalizedFiles: emitted.files,
+      sourceMap: emitted.sourceMap,
       hashes
     };
   }
@@ -121,13 +133,13 @@ function applyRuntimeReplacements(
   diagnostics: Diagnostic[],
   rewrites: RewriteRecord[],
   runtimeOptions: NormalizeRuntimeOptions
-): Map<string, string> {
-  const replacements = new Map<string, string>();
+): Map<string, ReplaceObjectDecision> {
+  const replacements = new Map<string, ReplaceObjectDecision>();
   if (!runtimeOptions.replaceObject) return replacements;
   for (const object of selected) {
     const decision = runtimeOptions.replaceObject(object);
     if (!decision) continue;
-    replacements.set(object.qualifiedName.toLowerCase(), decision.content);
+    replacements.set(object.qualifiedName.toLowerCase(), decision);
     diagnostics.push(
       diagnostic(decision.severity ?? "info", decision.code, decision.message, {
         blocking: false,
@@ -341,8 +353,14 @@ function emitNormalized(
   diagnostics: Diagnostic[],
   rewrites: RewriteRecord[],
   strict: boolean,
-  runtimeReplacements: Map<string, string>
-): { files: NormalizedFile[]; included: string[]; includedIds: string[]; omitted: string[] } {
+  runtimeReplacements: Map<string, ReplaceObjectDecision>
+): {
+  files: NormalizedFile[];
+  included: string[];
+  includedIds: string[];
+  omitted: string[];
+  sourceMap: NormalizedSourceMapEntry[];
+} {
   const childrenByOwner = new Map<string, TcGenObject[]>();
   for (const object of objects) {
     if (!object.ownerName) continue;
@@ -355,6 +373,7 @@ function emitNormalized(
   const included: string[] = [];
   const includedIds: string[] = [];
   const omitted: string[] = [];
+  const sourceMap: NormalizedSourceMapEntry[] = [];
   for (const object of objects) {
     if (object.ownerName) continue;
     if (object.kind === "visualization") {
@@ -367,7 +386,13 @@ function emitNormalized(
     }
     const runtimeReplacement = runtimeReplacements.get(object.qualifiedName.toLowerCase());
     if (runtimeReplacement !== undefined) {
-      chunks.push(runtimeReplacement.trimEnd());
+      pushChunk(
+        chunks,
+        sourceMap,
+        runtimeReplacement.content.trimEnd(),
+        object,
+        runtimeReplacement.sourceKind
+      );
       included.push(object.qualifiedName);
       includedIds.push(object.id);
       omitted.push(...(childrenByOwner.get(object.qualifiedName.toLowerCase()) ?? []).map(child => child.qualifiedName));
@@ -376,7 +401,7 @@ function emitNormalized(
     if (object.kind === "gvl" || object.kind === "parameterList") {
       const emitted = emitGlobalObject(object, symbolMap, diagnostics, rewrites, strict);
       if (emitted) {
-        chunks.push(emitted);
+        pushChunk(chunks, sourceMap, emitted, object);
         included.push(object.qualifiedName);
         includedIds.push(object.id);
       } else {
@@ -397,7 +422,7 @@ function emitNormalized(
     omitted.push(...children.filter(child => !emittedChildIds.has(child.id)).map(child => child.qualifiedName));
     const implementation = rewriteObjectText(object, object.implementationText, symbolMap, rewrites, "NormalizeGlobalLists");
     const parts = [declaration, nestedChildren, implementation].filter(part => part.trim());
-    chunks.push(`${parts.join("\n\n")}\n${terminatorFor(object.kind)}`);
+    pushChunk(chunks, sourceMap, `${parts.join("\n\n")}\n${terminatorFor(object.kind)}`, object);
     included.push(object.qualifiedName, ...emittedChildren.map(child => child.qualifiedName));
     includedIds.push(object.id, ...emittedChildren.map(child => child.id));
   }
@@ -406,8 +431,38 @@ function emitNormalized(
     files: chunks.length > 0 ? [{ path: "normalized.st", content: chunks.join("\n\n") + "\n" }] : [],
     included,
     includedIds,
-    omitted
+    omitted,
+    sourceMap
   };
+}
+
+function pushChunk(
+  chunks: string[],
+  sourceMap: NormalizedSourceMapEntry[],
+  content: string,
+  object: TcGenObject,
+  sourceKind?: NormalizedSourceMapEntry["sourceKind"]
+): void {
+  const previous = sourceMap[sourceMap.length - 1];
+  const generatedStartLine = previous ? previous.generatedEndLine + 2 : 1;
+  const generatedEndLine = generatedStartLine + lineCount(content) - 1;
+  chunks.push(content);
+  sourceMap.push({
+    generatedPath: "normalized.st",
+    generatedStartLine,
+    generatedEndLine,
+    original: { ...object.sourceSpan },
+    object: object.qualifiedName,
+    sourceKind: sourceKind ?? (isFrameworkTestObject(object) ? "generated_test_harness" : "candidate")
+  });
+}
+
+function lineCount(value: string): number {
+  return value.split(/\r?\n/).length;
+}
+
+function isFrameworkTestObject(object: TcGenObject): boolean {
+  return /^FB_Test_/i.test(object.name) || object.extendsType?.toLowerCase() === "fb_testcasebase";
 }
 
 function normalizeDeclaration(object: TcGenObject, diagnostics: Diagnostic[], rewrites: RewriteRecord[], strict: boolean): string {

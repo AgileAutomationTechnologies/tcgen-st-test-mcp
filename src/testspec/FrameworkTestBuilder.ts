@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   Diagnostic,
   FrameworkAssertionEvidence,
+  FrameworkExecutionContract,
   FrameworkTestConfig,
   FrameworkTargetCoverage,
   NormalizedFile,
@@ -14,6 +15,15 @@ import {
   isFrameworkRunnerProgram,
   validateFrameworkTargetCoverage
 } from "./FrameworkTargetCoverageValidator.js";
+import {
+  FRAMEWORK_EXECUTION_CONTRACT,
+  validateFrameworkExecutionContract
+} from "./FrameworkExecutionContract.js";
+
+// The offline adapter has no TwinCAT task clock. Advance a deterministic
+// one-millisecond task interval before each resumed execute scan so IEC timers
+// observe the same passage of time that they would between PLC task cycles.
+export const FRAMEWORK_SCAN_TIME_NANOSECONDS = 1_000_000;
 
 export interface FrameworkTestFile {
   path: string;
@@ -29,6 +39,7 @@ export interface FrameworkTestFile {
   frameworkTargetCoverage: FrameworkTargetCoverage[];
   assertions: FrameworkAssertionEvidence[];
   frameworkTestFiles: SourceFile[];
+  executionContract?: FrameworkExecutionContract;
 }
 
 const frameworkInfrastructure = new Set([
@@ -74,7 +85,8 @@ export function replaceFrameworkRunnerProgram(object: TcGenObject): ReplaceObjec
     message:
       `Framework runner PROGRAM '${object.qualifiedName}' was structurally validated through FB_TestRunner registration and replaced by a compiled offline registration surrogate; generated wrappers execute the concrete tests directly.`,
     severity: "info",
-    ruleId: "ApplyOfflineFrameworkRunnerSurrogate"
+    ruleId: "ApplyOfflineFrameworkRunnerSurrogate",
+    sourceKind: "generated_test_harness"
   };
 }
 
@@ -99,6 +111,12 @@ export class FrameworkTestBuilder {
       submittedSources
     );
     diagnostics.push(...targetCoverage.diagnostics);
+    diagnostics.push(...validateFrameworkExecutionContract(
+      config,
+      selected,
+      normalized.document.objects,
+      submittedSources
+    ));
     diagnostics.push(
       diagnostic("info", "TCFRAMEWORK_SHIM_APPLIED", "Using the offline STruC++-compatible TcGen test-framework shim.", {
         blocking: false,
@@ -113,7 +131,10 @@ export class FrameworkTestBuilder {
         selected.map(testBlock => testBlock.name),
         targetCoverage.coverage,
         targetCoverage.assertions,
-        targetCoverage.frameworkTestFiles
+        targetCoverage.frameworkTestFiles,
+        config.executionContract === FRAMEWORK_EXECUTION_CONTRACT
+          ? FRAMEWORK_EXECUTION_CONTRACT
+          : undefined
       );
     }
 
@@ -132,7 +153,8 @@ export class FrameworkTestBuilder {
       coveredExecutableObjects: selected.map(testBlock => testBlock.name),
       frameworkTargetCoverage: targetCoverage.coverage,
       assertions: targetCoverage.assertions,
-      frameworkTestFiles: targetCoverage.frameworkTestFiles
+      frameworkTestFiles: targetCoverage.frameworkTestFiles,
+      executionContract: FRAMEWORK_EXECUTION_CONTRACT
     };
   }
 }
@@ -153,7 +175,8 @@ function emptyFrameworkTest(
   selectedFrameworkTests: string[] = [],
   frameworkTargetCoverage: FrameworkTargetCoverage[] = [],
   assertions: FrameworkAssertionEvidence[] = [],
-  frameworkTestFiles: SourceFile[] = []
+  frameworkTestFiles: SourceFile[] = [],
+  executionContract?: FrameworkExecutionContract
 ): FrameworkTestFile {
   return {
     path: "semantic_framework_tests.st",
@@ -168,7 +191,8 @@ function emptyFrameworkTest(
     coveredExecutableObjects: [],
     frameworkTargetCoverage,
     assertions,
-    frameworkTestFiles
+    frameworkTestFiles,
+    ...(executionContract ? { executionContract } : {})
   };
 }
 
@@ -246,24 +270,30 @@ function emitWrapperTests(testBlocks: TcGenObject[], maxScans: number): string {
     lines.push(`TEST '${escapeString(frameworkWrapperName(testBlock.name))}'`);
     lines.push("VAR");
     lines.push(`    ${instance} : ${testBlock.name};`);
-    lines.push("    scan : DINT;");
-    lines.push("    done : BOOL;");
+    lines.push("    tcframework_execute_complete : BOOL;");
     lines.push("    result : ST_TestCaseResult;");
     lines.push("END_VAR");
     lines.push(`${instance}.m_xSetup(i_xTrigger := TRUE);`);
     lines.push(`${instance}.m_xSetup(i_xTrigger := FALSE);`);
     lines.push(`${instance}.m_xExecute(i_xTrigger := TRUE);`);
-    lines.push(`FOR scan := 1 TO ${maxScans} DO`);
-    lines.push("    IF NOT done THEN");
-    lines.push(`        done := NOT ${instance}.m_xIsBusy();`);
-    lines.push("    END_IF");
-    lines.push("END_FOR");
-    lines.push("IF done THEN");
+    lines.push(`tcframework_execute_complete := NOT ${instance}.m_xIsBusy();`);
+    // STruC++ 0.5.12 accepts ADVANCE_TIME only as a top-level TEST statement.
+    // Emit bounded scan slots rather than nesting it in FOR/IF. Time after an
+    // early completion is harmless; the exact test FB is resumed only while
+    // it reports busy.
+    for (let scan = 1; scan <= maxScans; scan += 1) {
+      lines.push(`ADVANCE_TIME(${FRAMEWORK_SCAN_TIME_NANOSECONDS});`);
+      lines.push("IF NOT tcframework_execute_complete THEN");
+      lines.push(`    ${instance}.m_xExecute(i_xTrigger := FALSE);`);
+      lines.push(`    tcframework_execute_complete := NOT ${instance}.m_xIsBusy();`);
+      lines.push("END_IF");
+    }
+    lines.push("IF tcframework_execute_complete THEN");
     lines.push(`    ${instance}.m_xTeardown(i_xTrigger := TRUE);`);
     lines.push(`    ${instance}.m_xTeardown(i_xTrigger := FALSE);`);
     lines.push("END_IF");
     lines.push(`result := ${instance}.m_stGetResult();`);
-    lines.push("ASSERT_TRUE(done);");
+    lines.push("ASSERT_TRUE(tcframework_execute_complete);");
     lines.push("ASSERT_TRUE(result.udiAssertions > 0);");
     lines.push("ASSERT_EQ(result.sErrorMessage, '');");
     lines.push("ASSERT_EQ(result.udiFailed, 0);");

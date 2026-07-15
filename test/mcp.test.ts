@@ -28,17 +28,35 @@ describe("MCP tool metadata", () => {
       const metadata = (tool.metadata as Record<string, Record<string, unknown>>).tcgen;
       expect(metadata.semanticReportSchemaVersion).toBe(2);
       expect(metadata.capabilities).toContain("frameworkTargetCoverageV1");
-      expect(metadata.serverVersion).toBe("0.5.0");
+      expect(metadata.capabilities).toContain("frameworkMultiScanV1");
+      expect(metadata.serverVersion).toBe("0.6.0");
       expect(metadata.evidencePaths).toEqual(
         expect.arrayContaining([
           "structuredContent.testMode",
           "structuredContent.coveredExecutableObjects",
           "structuredContent.frameworkTargetCoverage",
+          "structuredContent.backend.executionAttempted",
           "structuredContent.generatedTestNames",
           "structuredContent.subject.candidateSha256",
           "structuredContent.subject.dependencyBundleSha256"
         ])
       );
+    }
+  });
+
+  it("requires the multi-scan execution contract for Framework requests", () => {
+    for (const tool of toolDefinitions.filter(tool => tool.name === "tcgen_st_test_generate" || tool.name === "tcgen_st_test_run")) {
+      const schema = tool.inputSchema as {
+        properties: {
+          frameworkTest: {
+            required: string[];
+            properties: { executionContract: { const: string } };
+          };
+        };
+      };
+      expect(schema.properties.frameworkTest.required).toContain("executionContract");
+      expect(schema.properties.frameworkTest.properties.executionContract.const)
+        .toBe("tcgen-framework-multiscan-v1");
     }
   });
 

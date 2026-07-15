@@ -247,7 +247,7 @@ describe("STruC++ backend", () => {
     });
   }, 60_000);
 
-  it("advances a busy framework test through repeated m_xIsBusy scans", async () => {
+  it("advances a busy framework test through FALSE-trigger execute scans", async () => {
     const repo = localStrucppRepo();
     if (!repo) return;
     await withEnv({ STRUCPP_PATH: repo }, async () => {
@@ -257,11 +257,88 @@ describe("STruC++ backend", () => {
         loadRequest("framework-limit-counter") as unknown as Record<string, unknown>
       )) as SemanticTestReport;
       expect(result.verdict).toBe("passed");
+      expect(result.backend.executionAttempted).toBe(true);
       expect(result.summary.passed).toBe(1);
       expect(result.testMode).toBe("framework");
       expect(result.coveredExecutableObjects).toEqual(["FB_Test_LimitCounter"]);
       expect(result.generatedTestNames).toEqual(["framework FB_Test_LimitCounter"]);
       expect(result.subject.selectedFrameworkTests).toEqual(["FB_Test_LimitCounter"]);
+    });
+  }, 60_000);
+
+  it("advances IEC timer time between resumed framework scans", async () => {
+    const repo = localStrucppRepo();
+    if (!repo) return;
+    await withEnv({ STRUCPP_PATH: repo }, async () => {
+      const check = await new StrucppBackend().check();
+      if (!check.available || !check.gppAvailable) return;
+      const request = loadRequest("framework-limit-counter");
+      const candidate = request.sources.find(source => source.path === "cut.st")!;
+      const test = request.sources.find(source => source.path === "test.st")!;
+      const main = request.sources.find(source => source.path === "main.st")!;
+      candidate.content = [
+        "FUNCTION_BLOCK FB_TimerProbe",
+        "VAR_INPUT",
+        "    i_xEnable : BOOL;",
+        "END_VAR",
+        "VAR_OUTPUT",
+        "    q_xDone : BOOL;",
+        "END_VAR",
+        "VAR",
+        "    tonDelay : TON;",
+        "END_VAR",
+        "tonDelay(IN := i_xEnable, PT := T#2ms);",
+        "q_xDone := tonDelay.Q;",
+        "END_FUNCTION_BLOCK",
+        ""
+      ].join("\n");
+      test.content = [
+        "FUNCTION_BLOCK FB_Test_TimerProbe EXTENDS FB_TestCaseBase",
+        "VAR",
+        "    fbCut : FB_TimerProbe;",
+        "END_VAR",
+        "METHOD PUBLIC m_xExecute : BOOL",
+        "VAR_INPUT",
+        "    i_xTrigger : BOOL;",
+        "END_VAR",
+        "IF i_xTrigger THEN",
+        "    _sTestCaseName := 'timer advances across offline scans';",
+        "    _eExecuteState := eTestState_Running;",
+        "    fbCut(i_xEnable := TRUE);",
+        "    _xPhaseBusy := TRUE;",
+        "ELSIF _xPhaseBusy THEN",
+        "    fbCut(i_xEnable := TRUE);",
+        "    IF fbCut.q_xDone THEN",
+        "        m_xAssertTrue(fbCut.q_xDone, 'TON elapsed after simulated scans');",
+        "        _eExecuteState := eTestState_Passed;",
+        "        _xPhaseBusy := FALSE;",
+        "    END_IF",
+        "END_IF",
+        "m_xExecute := TRUE;",
+        "END_METHOD",
+        "METHOD PUBLIC m_xIsBusy : BOOL",
+        "m_xIsBusy := _xPhaseBusy;",
+        "END_METHOD",
+        "END_FUNCTION_BLOCK",
+        ""
+      ].join("\n");
+      main.content = main.content.replaceAll("FB_Test_LimitCounter", "FB_Test_TimerProbe");
+      request.frameworkTest!.testFunctionBlocks = ["FB_Test_TimerProbe"];
+      request.frameworkTest!.targetMappings = [{
+        testFunctionBlock: "FB_Test_TimerProbe",
+        productionTarget: "FB_TimerProbe",
+        testSourcePath: "test.st",
+        testSourceSha256: createHash("sha256").update(test.content, "utf8").digest("hex")
+      }];
+      request.frameworkTest!.maxScans = 5;
+
+      const result = (await toolHandlers.tcgen_st_test_run(
+        request as unknown as Record<string, unknown>
+      )) as SemanticTestReport;
+
+      expect(result.verdict).toBe("passed");
+      expect(result.backend.executionAttempted).toBe(true);
+      expect(result.tests).toEqual([{ name: "framework FB_Test_TimerProbe", status: "passed" }]);
     });
   }, 60_000);
 });

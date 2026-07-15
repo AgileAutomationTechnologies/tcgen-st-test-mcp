@@ -112,6 +112,7 @@ Framework mode uses:
 {
   "frameworkTest": {
     "mode": "tcgen-test-framework",
+    "executionContract": "tcgen-framework-multiscan-v1",
     "testFunctionBlocks": ["FB_Test_LimitCounter"],
     "targetMappings": [
       {
@@ -145,8 +146,16 @@ adapter is returned in `generatedTestFile`; `hashes.testSource` identifies that
 adapter, while each framework source retains its own trusted mapping hash.
 Semantic report v2 publishes the verified identities and structural evidence in
 `frameworkTargetCoverage[]` (`assertionCount`, `targetReferenceCount`, and
-`verified`). Generate and run tool metadata advertise
-`capabilities: ["frameworkTargetCoverageV1"]`.
+`verified`). Generate and run tool metadata advertise the
+`frameworkTargetCoverageV1` and `frameworkMultiScanV1` capabilities. The
+required `tcgen-framework-multiscan-v1` contract calls `m_xExecute(TRUE)` once,
+then calls `m_xExecute(FALSE)` once per offline PLC scan while `m_xIsBusy()`
+remains true. The offline task interval is deterministic: each resumed scan is
+preceded by `ADVANCE_TIME(1000000)` (one millisecond), allowing IEC timers to
+progress without introducing STruC++ syntax into the submitted Beckhoff ST.
+Synchronous tests that finish on the initial call remain valid. A
+multi-scan test must advance work on FALSE-trigger calls; `m_xIsBusy()` reports
+state and must not advance the test as a side effect.
 
 The additive `assertions[]` field identifies every meaningful submitted
 `m_xAssert*` call by source path, source SHA-256, one-based line, mapped target,
@@ -166,6 +175,8 @@ rewritten to a compiled offline registration surrogate; ordinary production
 `PROGRAM MAIN` objects remain unchanged. Generated wrapper `TEST` blocks then
 execute every concrete `FB_Test_*` instance. A failing assertion is returned as
 `verdict: "failed"` with the STruC++ detail in `tests[].message`.
+Semantic report v2 also exposes `backend.executionAttempted`, distinguishing a
+normalization/preflight rejection from an invocation that reached STruC++.
 
 ## Local Development
 
