@@ -92,7 +92,11 @@ export class StrucppBackend {
     };
   }
 
-  async run(sourcePaths: string[], testPath: string, options: { timeoutMs?: number } = {}): Promise<BackendRunResult> {
+  async run(
+    sourcePaths: string[],
+    testPath: string,
+    options: { timeoutMs?: number; signal?: AbortSignal } = {}
+  ): Promise<BackendRunResult> {
     const diagnostics: Diagnostic[] = [];
     const gpp = await resolveCompatibleGpp(true);
     diagnostics.push(...gpp.diagnostics);
@@ -153,7 +157,31 @@ export class StrucppBackend {
     const timeoutMs = Math.min(Math.max(options.timeoutMs ?? 30_000, 1_000), 120_000);
     const args = [...sourcePaths, "--gpp", gpp.executable, "--test", testPath];
     const started = Date.now();
-    const result = await spawnWithTimeout(backend.command, args, timeoutMs, gpp.executable);
+    const result = await spawnWithTimeout(
+      backend.command,
+      args,
+      timeoutMs,
+      gpp.executable,
+      dirname(testPath),
+      options.signal
+    );
+    if (result.cancelled) {
+      diagnostics.push(diagnostic("error", "SANDBOX_CANCELLED", "STruC++ execution was cancelled and its process tree was terminated."));
+      return {
+        status: "backend_error",
+        executionAttempted: true,
+        executable: backend.command.executable,
+        command: backend.command.command,
+        argumentsPrefix: backend.command.argsPrefix,
+        cliMode: backend.command.mode,
+        version: backend.version,
+        gppExecutable: gpp.executable,
+        durationMs: Date.now() - started,
+        diagnostics,
+        tests: [],
+        ...result
+      };
+    }
     if (result.timedOut) {
       diagnostics.push(diagnostic("error", "SANDBOX_TIMEOUT", `STruC++ timed out after ${timeoutMs} ms.`));
       return {
@@ -715,7 +743,8 @@ async function runSemanticRuntimeSelfTest(
       command,
       [sourcePath, "--gpp", gppExecutable, "--test", testPath],
       30_000,
-      gppExecutable
+      gppExecutable,
+      directory
     );
     if (result.timedOut) return { available: false, detail: "the self-test timed out" };
     const tests = parseTests(`${result.stdout}\n${result.stderr}`);
@@ -860,28 +889,60 @@ function spawnWithTimeout(
   command: ResolvedCommand,
   args: string[],
   timeoutMs: number,
-  gppExecutable?: string
-): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut?: boolean }> {
+  gppExecutable?: string,
+  semanticTempRoot?: string,
+  signal?: AbortSignal
+): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut?: boolean; cancelled?: boolean }> {
   return new Promise(resolveResult => {
     let settled = false;
+    let terminationReason: "timeout" | "cancelled" | undefined;
     const child = spawn(command.command, [...command.argsPrefix, ...args], {
       shell: false,
       windowsHide: true,
       cwd: command.cwd,
-      env: backendChildEnvironment(gppExecutable)
+      env: backendChildEnvironment(gppExecutable, semanticTempRoot)
     });
     let stdout = "";
     let stderr = "";
-    const finish = (result: { stdout: string; stderr: string; exitCode: number | null; timedOut?: boolean }) => {
+    let timer: NodeJS.Timeout | undefined;
+    let childClosedResolve: (() => void) | undefined;
+    const childClosed = new Promise<void>(resolve => {
+      childClosedResolve = resolve;
+    });
+    const onAbort = () => {
+      void terminate("cancelled");
+    };
+    const finish = (result: {
+      stdout: string;
+      stderr: string;
+      exitCode: number | null;
+      timedOut?: boolean;
+      cancelled?: boolean;
+    }) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
       resolveResult(result);
     };
-    const timer = setTimeout(() => {
-      killProcessTree(child.pid);
-      finish({ stdout, stderr, exitCode: null, timedOut: true });
+    const terminate = async (reason: "timeout" | "cancelled") => {
+      if (settled || terminationReason) return;
+      terminationReason = reason;
+      if (timer) clearTimeout(timer);
+      await killProcessTreeAndWait(child.pid);
+      await Promise.race([childClosed, delay(2_000)]);
+      finish({
+        stdout,
+        stderr,
+        exitCode: null,
+        ...(reason === "timeout" ? { timedOut: true } : { cancelled: true })
+      });
+    };
+    timer = setTimeout(() => {
+      void terminate("timeout");
     }, timeoutMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
     child.stdout?.on("data", chunk => {
       stdout += chunk.toString();
     });
@@ -889,21 +950,45 @@ function spawnWithTimeout(
       stderr += chunk.toString();
     });
     child.on("error", error => {
+      childClosedResolve?.();
+      if (terminationReason) return;
       finish({ stdout, stderr: stderr + error.message, exitCode: null });
     });
     child.on("close", code => {
+      childClosedResolve?.();
+      if (terminationReason) return;
       finish({ stdout, stderr, exitCode: code });
     });
   });
 }
 
-function killProcessTree(pid: number | undefined): void {
+async function killProcessTreeAndWait(pid: number | undefined): Promise<void> {
   if (!pid) return;
   if (process.platform === "win32") {
     const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows";
-    spawn(join(systemRoot, "System32", "taskkill.exe"), ["/pid", String(pid), "/T", "/F"], {
-      windowsHide: true,
-      env: backendChildEnvironment()
+    await new Promise<void>(resolveDone => {
+      let completed = false;
+      const finish = () => {
+        if (completed) return;
+        completed = true;
+        clearTimeout(timeout);
+        resolveDone();
+      };
+      const killer = spawn(join(systemRoot, "System32", "taskkill.exe"), ["/pid", String(pid), "/T", "/F"], {
+        windowsHide: true,
+        stdio: "ignore",
+        env: backendChildEnvironment()
+      });
+      const timeout = setTimeout(() => {
+        try {
+          killer.kill();
+        } catch {
+          // The bounded wait remains authoritative.
+        }
+        finish();
+      }, 5_000);
+      killer.once("error", finish);
+      killer.once("close", finish);
     });
     return;
   }
@@ -918,7 +1003,11 @@ function killProcessTree(pid: number | undefined): void {
   }
 }
 
-export function backendChildEnvironment(gppExecutable?: string): NodeJS.ProcessEnv {
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+export function backendChildEnvironment(gppExecutable?: string, semanticTempRoot?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of ["TEMP", "TMP", "HOME", "USERPROFILE", "SYSTEMROOT", "SystemRoot"]) {
     if (process.env[key]) env[key] = process.env[key];
@@ -928,6 +1017,7 @@ export function backendChildEnvironment(gppExecutable?: string): NodeJS.ProcessE
   // runtime directory. Do not inherit host PATH entries into semantic child
   // processes; bundled and advanced-override compilers are both explicit.
   env[pathKey] = gppExecutable ? dirname(gppExecutable) : "";
+  if (semanticTempRoot) env.STRUCPP_TEST_TEMP_ROOT = semanticTempRoot;
   return env;
 }
 

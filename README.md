@@ -147,8 +147,12 @@ adapter, while each framework source retains its own trusted mapping hash.
 Semantic report v2 publishes the verified identities and structural evidence in
 `frameworkTargetCoverage[]` (`assertionCount`, `targetReferenceCount`, and
 `verified`). Generate and run tool metadata advertise the
-`frameworkTargetCoverageV1`, `frameworkMultiScanV1`, and
-`twinCatShortCircuitOperatorsV1` capabilities. The short-circuit capability
+`frameworkTargetCoverageV1`, `frameworkMultiScanV1`,
+`twinCatShortCircuitOperatorsV1`, and (on `tcgen_st_test_run`)
+`candidateCompilePreflightV1` capabilities. The candidate-preflight capability
+means the trusted scheduler can compile the exact candidate and dependency
+bundle with a deterministic internal smoke specification before spending a
+model call on Framework ST design. The short-circuit capability
 requires the pinned STruC++ distribution to compile TwinCAT `AND_THEN` and
 `OR_ELSE` natively with lazy right-hand-side evaluation; the MCP never rewrites
 them to eager operators. The

@@ -12,7 +12,11 @@ import {
   verifyRuntimeManifest
 } from "../src/backends/StrucppBackend.js";
 import { Diagnostic, SemanticTestReport } from "../src/domain/models.js";
-import { compilerDiagnosticSourceKind } from "../src/domain/reportSanitizer.js";
+import {
+  compilerDiagnosticSourceKind,
+  structuredCompilerOutputDiagnostics,
+  strucppTwinCatCompatibilityGap
+} from "../src/domain/reportSanitizer.js";
 import { generatedTestResultMismatch, toolHandlers } from "../src/mcp/tools.js";
 import { exampleNames, loadRequest, localStrucppRepo, withEnv } from "./helpers.js";
 
@@ -68,6 +72,46 @@ describe("STruC++ backend", () => {
       .toBe("candidate");
     expect(compilerDiagnosticSourceKind("backend_error", "compiler process failed"))
       .toBe("backend");
+  });
+
+  it("does not blame valid TwinCAT syntax on the production candidate when the pinned parser lacks it", () => {
+    const accessor = [
+      "Error compiling source files:",
+      "normalized.st:244:1: error: Expected `END_GET`, found `VAR`.",
+      " 244 | VAR"
+    ].join("\n");
+    const groupedCase = [
+      "Error compiling source files:",
+      "normalized.st:175:17: error: Expected `END_CASE`, found identifier `E_TPPATTERN`.",
+      " 175 | E_TPPattern.Single, E_TPPattern.Delayed, E_TPPattern.Retriggerable:"
+    ].join("\n");
+
+    expect(strucppTwinCatCompatibilityGap("compile_error", accessor)?.code)
+      .toBe("STRUCPP_TWINCAT_PROPERTY_ACCESSOR_LOCALS_UNSUPPORTED");
+    expect(strucppTwinCatCompatibilityGap("compile_error", groupedCase)?.code)
+      .toBe("STRUCPP_TWINCAT_GROUPED_QUALIFIED_CASE_LABELS_UNSUPPORTED");
+    expect(strucppTwinCatCompatibilityGap("compile_error", "normalized.st:1: error: Expected expression"))
+      .toBeUndefined();
+
+    const diagnostics = structuredCompilerOutputDiagnostics(
+      "compile_error",
+      { stdout: "", stderr: groupedCase },
+      undefined,
+      [{
+        generatedPath: "normalized.st",
+        generatedStartLine: 1,
+        generatedEndLine: 300,
+        original: { path: "pous/function blocks/fb_tppattern.tcpou", startLine: 20, endLine: 183 },
+        object: "FB_TPPattern",
+        sourceKind: "candidate"
+      }]
+    );
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      code: "STRUCPP_TWINCAT_GROUPED_QUALIFIED_CASE_LABELS_UNSUPPORTED",
+      sourceKind: "backend",
+      object: "FB_TPPattern",
+      original: expect.objectContaining({ path: "pous/function blocks/fb_tppattern.tcpou" })
+    }));
   });
 
   it("never copies invocation grants or authorization secrets into backend child environments", async () => {

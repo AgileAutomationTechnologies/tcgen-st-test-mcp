@@ -10,6 +10,7 @@ import {
 import { TcGenToStrucppNormalizer } from "../normalizer/TcGenToStrucppNormalizer.js";
 import { normalizerOptionsForTestRequest, resolveTestFile, TestRequest } from "../testspec/TestFileResolver.js";
 import { applyFrameworkAssertionExecution } from "../testspec/FrameworkAssertionEvidence.js";
+import { resolveCandidateCompilePreflight } from "../testspec/CandidateCompilePreflight.js";
 import { WorkspaceManager } from "../workspace/WorkspaceManager.js";
 import { validateNormalizationReport, validateSemanticReport } from "../schemas/validators.js";
 import { packageVersion } from "../version.js";
@@ -85,7 +86,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
       ...normalizerOptionsForTestRequest(request),
       requireCandidateScopeCoverage: true
     });
-    const testFile = resolveTestFile(request, normalized);
+    const testFile = resolveCandidateCompilePreflight(request, normalized)
+      ?? resolveTestFile(request, normalized);
     const normalizedForRun = withRuntimeSourceFiles(normalized, testFile.sourceFiles);
     const keepWorkspace = request.options?.keepWorkspace === true && process.env.TCGEN_ST_ALLOW_KEEP_WORKSPACE === "true";
     const keepWorkspaceDiagnostics =
@@ -103,43 +105,67 @@ export const toolHandlers: Record<string, ToolHandler> = {
         normalized: normalizedForRun,
         testFile,
         diagnostics: preflightDiagnostics,
-        includeArtifacts: request.options?.includeArtifacts === true
+        includeArtifacts: request.options?.includeArtifacts === true,
+        executionPurpose: candidateCompilePreflightPurpose(request)
       });
     }
 
     const workspaceManager = new WorkspaceManager();
     const workspace = await workspaceManager.create();
-    let backendResult;
+    let backendResult: BackendRunResult | undefined;
+    let workspaceError: unknown;
+    let cleanupDiagnostics: SemanticTestReport["diagnostics"] = [];
     try {
       const sourcePaths = await workspaceManager.writeFiles(workspace, normalizedForRun.normalizedFiles);
       const [testPath] = await workspaceManager.writeFiles(workspace, [{ path: testFile.path, content: testFile.content }]);
       backendResult = await new StrucppBackend().run(sourcePaths, testPath, { timeoutMs: request.options?.timeoutMs });
     } catch (error) {
+      workspaceError = error;
+    } finally {
+      const cleanup = await workspaceManager.cleanup(workspace, keepWorkspace);
+      if (cleanup.diagnosticCode) {
+        cleanupDiagnostics = [
+          diagnostic(
+            "warning",
+            cleanup.diagnosticCode,
+            "The semantic test workspace could not be removed after bounded retries. The primary Virtual Tests result is unchanged.",
+            { blocking: false }
+          )
+        ];
+      }
+    }
+
+    if (workspaceError || !backendResult) {
       return buildReport({
         verdict: "backend_error",
         normalized: normalizedForRun,
         testFile,
         diagnostics: [
           ...preflightDiagnostics,
-          diagnostic("error", "SANDBOX_WORKSPACE_ERROR", error instanceof Error ? error.message : String(error))
+          diagnostic(
+            "error",
+            "SANDBOX_WORKSPACE_ERROR",
+            workspaceError instanceof Error ? workspaceError.message : String(workspaceError ?? "Semantic backend did not return a result.")
+          ),
+          ...cleanupDiagnostics
         ],
         includeArtifacts: request.options?.includeArtifacts === true,
         sanitizationWorkspace: workspace,
-        workspace: keepWorkspace ? workspace : undefined
+        workspace: keepWorkspace ? workspace : undefined,
+        executionPurpose: candidateCompilePreflightPurpose(request)
       });
-    } finally {
-      await workspaceManager.cleanup(workspace, keepWorkspace);
     }
 
     return buildReport({
       verdict: backendResult.status,
       normalized: normalizedForRun,
       testFile,
-      diagnostics: [...preflightDiagnostics, ...backendResult.diagnostics],
+      diagnostics: [...preflightDiagnostics, ...backendResult.diagnostics, ...cleanupDiagnostics],
       backendResult,
       includeArtifacts: request.options?.includeArtifacts === true,
       sanitizationWorkspace: workspace,
-      workspace: keepWorkspace ? workspace : undefined
+      workspace: keepWorkspace ? workspace : undefined,
+      executionPurpose: candidateCompilePreflightPurpose(request)
     });
   }
 };
@@ -188,6 +214,7 @@ function buildReport(input: {
   includeArtifacts?: boolean;
   sanitizationWorkspace?: string;
   workspace?: string;
+  executionPurpose?: SemanticTestReport["executionPurpose"];
 }): SemanticTestReport {
   const tests = (input.backendResult?.tests ?? []).map(test => ({
     ...test,
@@ -277,6 +304,7 @@ function buildReport(input: {
 
   const report: SemanticTestReport = {
     schemaVersion: 2,
+    ...(input.executionPurpose ? { executionPurpose: input.executionPurpose } : {}),
     testMode: input.testFile.mode,
     coveredExecutableObjects: [...input.testFile.coveredExecutableObjects],
     frameworkTargetCoverage: [...(input.testFile.frameworkTargetCoverage ?? [])],
@@ -321,6 +349,14 @@ function buildReport(input: {
     report.artifacts = artifacts;
   }
   return withSemanticReportValidation(report);
+}
+
+function candidateCompilePreflightPurpose(
+  request: TestRequest
+): SemanticTestReport["executionPurpose"] | undefined {
+  return request.options?.candidateCompilePreflight === true
+    ? "candidate_compile_preflight"
+    : undefined;
 }
 
 export function generatedTestResultMismatch(
@@ -417,7 +453,10 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
               capabilities: [
                 "frameworkTargetCoverageV1",
                 "frameworkMultiScanV1",
-                "twinCatShortCircuitOperatorsV1"
+                "twinCatShortCircuitOperatorsV1",
+                ...(name === "tcgen_st_test_run"
+                  ? ["candidateCompilePreflightV1"]
+                  : [])
               ]
             }
           : {}),
@@ -495,7 +534,15 @@ function normalizeSchema(requireTestSpec: boolean): Record<string, unknown> {
         includeNormalizedSources: { type: "boolean" },
         timeoutMs: { type: "number" },
         keepWorkspace: { type: "boolean" },
-        includeArtifacts: { type: "boolean" }
+        includeArtifacts: { type: "boolean" },
+        candidateCompilePreflight: {
+          type: "boolean",
+          description: "Trusted scheduler-only deterministic exact-candidate compile preflight."
+        },
+        executionPurpose: {
+          const: "candidate_compile_preflight",
+          description: "Reserved identity for the scheduler-owned candidate compile preflight."
+        }
       }
     }
   };

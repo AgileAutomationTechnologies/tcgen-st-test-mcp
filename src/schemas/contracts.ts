@@ -173,6 +173,7 @@ export const semanticReportSchema = {
   additionalProperties: false,
   properties: {
     schemaVersion: { const: 2 },
+    executionPurpose: { const: "candidate_compile_preflight" },
     testMode: { enum: ["generated", "framework"] },
     coveredExecutableObjects: {
       type: "array",

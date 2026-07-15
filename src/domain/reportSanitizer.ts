@@ -44,20 +44,55 @@ export function structuredCompilerOutputDiagnostics(
     const sanitized = truncateDiagnosticText(sanitizeCompilerOutput(output[channel], workspace).trim());
     if (!sanitized) continue;
     const provenance = compilerDiagnosticProvenance(verdict, sanitized, sourceMap);
+    const compatibilityGap = strucppTwinCatCompatibilityGap(verdict, sanitized);
     diagnostics.push(
       diagnostic(
         "error",
-        `STRUCPP_${category}_${channel.toUpperCase()}`,
+        compatibilityGap?.code ?? `STRUCPP_${category}_${channel.toUpperCase()}`,
         `STruC++ ${label} ${channel}:\n${sanitized}`,
         {
-          sourceKind: provenance.sourceKind,
+          // These constructs are valid in the TcGen/TwinCAT source contract.
+          // Treating the parser limitation as candidate provenance would send
+          // an agent into an avoidance-style repair loop and change valid
+          // production ST. Keep the exact source span for diagnosis while the
+          // backend compatibility gap remains the authoritative owner.
+          sourceKind: compatibilityGap ? "backend" : provenance.sourceKind,
           ...(provenance.original ? { original: provenance.original } : {}),
-          ...(provenance.object ? { object: provenance.object } : {})
+          ...(provenance.object ? { object: provenance.object } : {}),
+          ...(compatibilityGap ? { suggestion: compatibilityGap.suggestion } : {})
         }
       )
     );
   }
   return diagnostics;
+}
+
+export function strucppTwinCatCompatibilityGap(
+  verdict: SemanticVerdict,
+  sanitizedOutput: string
+): { code: string; suggestion: string } | undefined {
+  if (verdict !== "compile_error") return undefined;
+  if (
+    /Expected\s+`END_GET`,\s+found\s+`VAR`/i.test(sanitizedOutput)
+    || /Expected\s+`END_SET`,\s+found\s+`VAR`/i.test(sanitizedOutput)
+  ) {
+    return {
+      code: "STRUCPP_TWINCAT_PROPERTY_ACCESSOR_LOCALS_UNSUPPORTED",
+      suggestion:
+        "Update the pinned STruC++ runtime with native PROPERTY accessor-local declaration support; do not rewrite valid TwinCAT production ST to avoid this compiler limitation."
+    };
+  }
+  if (
+    /Expected\s+`END_CASE`,\s+found\s+identifier/i.test(sanitizedOutput)
+    && /\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\s*,\s*[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*/i.test(sanitizedOutput)
+  ) {
+    return {
+      code: "STRUCPP_TWINCAT_GROUPED_QUALIFIED_CASE_LABELS_UNSUPPORTED",
+      suggestion:
+        "Update the pinned STruC++ runtime with native grouped qualified CASE-label support; do not rewrite valid TwinCAT production ST to avoid this compiler limitation."
+    };
+  }
+  return undefined;
 }
 
 export function compilerDiagnosticSourceKind(

@@ -191,6 +191,7 @@ describe("semantic report v2 contract", () => {
     expect(metadata.capabilities).toContain("frameworkTargetCoverageV1");
     expect(metadata.capabilities).toContain("frameworkMultiScanV1");
     expect(metadata.capabilities).toContain("twinCatShortCircuitOperatorsV1");
+    expect(metadata.capabilities).toContain("candidateCompilePreflightV1");
   });
 });
 

@@ -105,7 +105,13 @@ export interface NormalizeRequest {
   candidateSourcePath: string;
   sources: SourceFile[];
   scope?: { mode: "all" | "entrypoints"; entrypoints?: string[]; additionalSymbols?: string[] };
-  options?: { strict?: boolean; includeNormalizedSources?: boolean; autoClose?: boolean };
+  options?: {
+    strict?: boolean;
+    includeNormalizedSources?: boolean;
+    autoClose?: boolean;
+    candidateCompilePreflight?: boolean;
+    executionPurpose?: "candidate_compile_preflight";
+  };
 }
 
 export interface SemanticTestSubject {
@@ -196,6 +202,7 @@ export interface BackendCheckResult {
 
 export interface SemanticTestReport {
   schemaVersion: 2;
+  executionPurpose?: "candidate_compile_preflight";
   testMode: SemanticTestMode;
   coveredExecutableObjects: string[];
   frameworkTargetCoverage: FrameworkTargetCoverage[];
