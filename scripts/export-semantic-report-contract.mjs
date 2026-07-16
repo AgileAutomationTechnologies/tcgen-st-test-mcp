@@ -95,7 +95,8 @@ export function createSemanticReportContractFixture(input) {
       executionAttempted: true,
       version: input.testedStrucppVersion,
       standardFunctionBlockContracts: input.standardFunctionBlockContracts,
-      standardFunctionBlockContractQualified: true
+      standardFunctionBlockContractQualified: true,
+      beckhoffSimulation: { ...generated.backend.beckhoffSimulation }
     },
     normalization: generated.normalization,
     summary: {

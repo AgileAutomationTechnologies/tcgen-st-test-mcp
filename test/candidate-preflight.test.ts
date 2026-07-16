@@ -20,7 +20,7 @@ describe("candidate compile preflight", () => {
           executionAttempted: true,
           executable: "strucpp-win.exe",
           cliMode: "native",
-          version: "0.5.13-tcgen.5",
+          version: "0.5.13-tcgen.6",
           gppExecutable: "g++.exe",
           stdout: `PASS: ${candidateCompilePreflightTestName}`,
           stderr: "",

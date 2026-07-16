@@ -136,11 +136,22 @@ describe("semantic report v2 contract", () => {
       executionAttempted: _executionAttempted,
       standardFunctionBlockContracts: _standardFunctionBlockContracts,
       standardFunctionBlockContractQualified: _standardFunctionBlockContractQualified,
+      beckhoffSimulation: _beckhoffSimulation,
       ...legacyBackend
     } = legacyFields.backend;
+    const {
+      beckhoffSimulationIdentity: _subjectSimulationIdentity,
+      ...legacySubject
+    } = legacyFields.subject;
+    const {
+      beckhoffSimulationIdentity: _hashSimulationIdentity,
+      ...legacyHashes
+    } = legacyFields.hashes;
     const legacyReport = {
       ...legacyFields,
       backend: legacyBackend,
+      subject: legacySubject,
+      hashes: legacyHashes,
       ...(legacyFields.artifacts ? { artifacts: legacyArtifacts } : {}),
       schemaVersion: 1,
       summary: {

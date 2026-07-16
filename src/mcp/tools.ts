@@ -2,11 +2,11 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import {
   BackendRunResult,
+  expectedTransparentBeckhoffSimulation,
   StrucppBackend,
 } from "../backends/StrucppBackend.js";
 import { copyStandardFunctionBlockContracts } from "../backends/StandardFunctionBlockContracts.js";
 import {
-  BeckhoffVirtualEnvironment,
   NormalizeRequest,
   SemanticTestReport,
   SemanticTestSubject,
@@ -35,10 +35,6 @@ import {
   validateSemanticReport,
 } from "../schemas/validators.js";
 import { packageVersion } from "../version.js";
-import {
-  validateVirtualEnvironment,
-  virtualEnvironmentSha256,
-} from "../domain/virtualEnvironment.js";
 
 export type ToolProgress = {
   progress: number;
@@ -127,13 +123,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
       message: "Normalizing the exact candidate scope.",
     });
     const request = args as unknown as NormalizeRequest;
-    const virtualEnvironment = validateVirtualEnvironment(
-      request.virtualEnvironment,
-    );
-    const result = withVirtualEnvironmentProvenance(
-      new TcGenToStrucppNormalizer().normalize(request),
-      virtualEnvironment,
-    );
+    const result = new TcGenToStrucppNormalizer().normalize(request);
     const response = {
       schemaVersion: 1,
       subject: result.subject,
@@ -168,15 +158,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
       message: "Normalizing the exact candidate and Framework ST.",
     });
     const request = args as unknown as TestRequest;
-    const virtualEnvironment = validateVirtualEnvironment(
-      request.virtualEnvironment,
-    );
-    const normalized = withVirtualEnvironmentProvenance(
+    const simulation = expectedTransparentBeckhoffSimulation();
+    const normalized = withBeckhoffSimulationIdentity(
       new TcGenToStrucppNormalizer().normalize(
         request,
         normalizerOptionsForTestRequest(request),
       ),
-      virtualEnvironment,
+      simulation.identity,
     );
     const generated = resolveTestFile(request, normalized);
     emitCheckpointProgress(context, generated.assertions ?? [], "queued", 1, 2);
@@ -209,6 +197,11 @@ export const toolHandlers: Record<string, ToolHandler> = {
         ? { executionContract: generated.executionContract }
         : {}),
       subject: subjectForTest(normalizedForReport.subject, generated),
+      backend: {
+        name: "strucpp",
+        executionAttempted: false,
+        beckhoffSimulation: simulation,
+      },
       normalization: normalizedForReport.normalization,
       normalizedFiles:
         request.options?.includeNormalizedSources === false
@@ -250,15 +243,12 @@ export const toolHandlers: Record<string, ToolHandler> = {
         includeArtifacts?: boolean;
       };
     };
-    const virtualEnvironment = validateVirtualEnvironment(
-      request.virtualEnvironment,
-    );
-    const normalized = withVirtualEnvironmentProvenance(
+    const normalized = withBeckhoffSimulationIdentity(
       new TcGenToStrucppNormalizer().normalize(request, {
         ...normalizerOptionsForTestRequest(request),
         requireCandidateScopeCoverage: true,
       }),
-      virtualEnvironment,
+      expectedTransparentBeckhoffSimulation().identity,
     );
     const testFile =
       resolveCandidateCompilePreflight(request, normalized) ??
@@ -342,14 +332,6 @@ export const toolHandlers: Record<string, ToolHandler> = {
       const [testPath] = await workspaceManager.writeFiles(workspace, [
         { path: testFile.path, content: testFile.content },
       ]);
-      const [virtualFixturePath] = virtualEnvironment
-        ? await workspaceManager.writeFiles(workspace, [
-            {
-              path: "virtual-environment.json",
-              content: JSON.stringify(virtualEnvironment, null, 2),
-            },
-          ])
-        : [undefined];
       progress(context, {
         progress: 3,
         total: 5,
@@ -364,12 +346,6 @@ export const toolHandlers: Record<string, ToolHandler> = {
       backendResult = await new StrucppBackend().run(sourcePaths, testPath, {
         timeoutMs: request.options?.timeoutMs,
         signal: context?.signal,
-        libraryProfile: "beckhoff-virtual",
-        ...(virtualFixturePath
-          ? {
-              virtualFixturePath,
-            }
-          : {}),
         onTestResult: (test) => {
           const assertion = assertionByCheckpointTest.get(test.name);
           if (assertion) {
@@ -681,6 +657,9 @@ function buildReport(input: {
       copyStandardFunctionBlockContracts(),
     standardFunctionBlockContractQualified:
       input.backendResult?.standardFunctionBlockContractQualified === true,
+    beckhoffSimulation:
+      input.backendResult?.beckhoffSimulation ??
+      expectedTransparentBeckhoffSimulation(),
   };
   if (input.backendResult?.executable)
     backend.executable = input.backendResult.executable;
@@ -1061,7 +1040,7 @@ function tool(
                 "frameworkLifecycleV1",
                 "frameworkArtifactRolesV1",
                 "frameworkAssertionRunningProgressV1",
-                "beckhoffVirtualEnvironmentV1",
+                "beckhoffVirtualTransparentExecutionV1",
                 ...(name === "tcgen_st_test_run"
                   ? ["candidateCompilePreflightV1"]
                   : []),
@@ -1101,7 +1080,9 @@ function tool(
           "structuredContent.subject.dependencyBundleSha256",
           "structuredContent.subject.discoveredFrameworkTests",
           "structuredContent.subject.selectedFrameworkTests",
-          "structuredContent.subject.virtualEnvironmentSha256",
+          "structuredContent.subject.beckhoffSimulationIdentity",
+          "structuredContent.backend.beckhoffSimulation.identity",
+          "structuredContent.backend.beckhoffSimulation.qualified",
           "structuredContent.normalization.status",
           "structuredContent.diagnostics",
         ],
@@ -1139,7 +1120,6 @@ function normalizeSchema(requireTestSpec: boolean): Record<string, unknown> {
         },
       },
     },
-    virtualEnvironment: virtualEnvironmentSchema(),
     scope: {
       type: "object",
       description:
@@ -1223,64 +1203,6 @@ function normalizeSchema(requireTestSpec: boolean): Record<string, unknown> {
   };
 }
 
-function virtualEnvironmentSchema(): Record<string, unknown> {
-  return {
-    type: "object",
-    required: ["schemaVersion", "profile"],
-    additionalProperties: false,
-    properties: {
-      schemaVersion: { const: 1 },
-      profile: { const: "beckhoff-virtual-v1" },
-      scanPeriodNanoseconds: { type: "integer", minimum: 0 },
-      monotonicNanoseconds: { type: "integer", minimum: 0 },
-      utcUnixNanoseconds: { type: "integer", minimum: 0 },
-      timeZone: { type: "string" },
-      resources: {
-        type: "array",
-        items: {
-          type: "object",
-          required: ["kind", "key"],
-          properties: {
-            kind: {
-              enum: [
-                "adsSymbol",
-                "sandboxFile",
-                "motionAxis",
-                "fieldbusDevice",
-                "registerBank",
-                "messageEndpoint",
-                "transferEndpoint",
-                "opcUaNode",
-                "databaseTable",
-                "diagnosticParameter",
-              ],
-            },
-            key: { type: "string", minLength: 1 },
-          },
-        },
-      },
-      faults: {
-        type: "array",
-        items: {
-          type: "object",
-          required: ["target"],
-          additionalProperties: false,
-          properties: {
-            target: {
-              type: "string",
-              pattern: "^[A-Za-z_]\\w*\\.[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)?$",
-            },
-            resourceKey: { type: "string" },
-            callNumber: { type: "integer", minimum: 0 },
-            delayScans: { type: "integer", minimum: 0 },
-            errorId: { type: "integer", minimum: 0 },
-          },
-        },
-      },
-    },
-  };
-}
-
 function primaryTestArtifact(testFile: {
   path: string;
   content: string;
@@ -1331,21 +1253,19 @@ function withRuntimeSourceFiles(
   };
 }
 
-function withVirtualEnvironmentProvenance(
+function withBeckhoffSimulationIdentity(
   normalized: ReturnType<TcGenToStrucppNormalizer["normalize"]>,
-  virtualEnvironment: BeckhoffVirtualEnvironment | undefined,
+  identity: string,
 ): ReturnType<TcGenToStrucppNormalizer["normalize"]> {
-  if (!virtualEnvironment) return normalized;
-  const digest = virtualEnvironmentSha256(virtualEnvironment);
   return {
     ...normalized,
     subject: {
       ...normalized.subject,
-      virtualEnvironmentSha256: digest,
+      beckhoffSimulationIdentity: identity,
     },
     hashes: {
       ...normalized.hashes,
-      virtualEnvironmentSha256: digest,
+      beckhoffSimulationIdentity: identity,
     },
   };
 }

@@ -20,6 +20,7 @@ import {
 import { spawn } from "node:child_process";
 import {
   BackendCheckResult,
+  BeckhoffSimulationIdentity,
   Diagnostic,
   diagnostic,
 } from "../domain/models.js";
@@ -57,6 +58,7 @@ export interface BackendRunResult {
     typeof copyStandardFunctionBlockContracts
   >;
   standardFunctionBlockContractQualified: boolean;
+  beckhoffSimulation: BeckhoffSimulationIdentity;
 }
 
 type ResolvedCommand = {
@@ -79,9 +81,16 @@ type ResolvedBackend = {
   standardFunctionBlockContracts: ReturnType<
     typeof copyStandardFunctionBlockContracts
   >;
+  beckhoffSimulation?: BeckhoffSimulationIdentity;
 };
 
-export const testedStrucppVersion = "0.5.13-tcgen.5";
+export const testedStrucppVersion = "0.5.13-tcgen.6";
+export const transparentBeckhoffCapability =
+  "beckhoffVirtualTransparentExecutionV1" as const;
+export const testedBeckhoffSimulationIdentity =
+  "beckhoff-transparent:77b11ee033ffbcaad6f5615f315abfa85a2d2d54b2ed88d46e9392de2f06bc97";
+const expectedBeckhoffDescriptorCount = 621;
+const expectedBeckhoffSupportTypeCount = 298;
 const developmentMsys2Gpp = "C:\\msys64\\ucrt64\\bin\\g++.exe";
 const bundledStrucppRelativePath = join("backend", "strucpp-win.exe");
 const bundledGppRelativePath = join("toolchain", "mingw64", "bin", "g++.exe");
@@ -124,6 +133,30 @@ function standardFunctionBlockQualification(
   };
 }
 
+function unavailableBeckhoffSimulation(): BeckhoffSimulationIdentity {
+  return {
+    profile: "beckhoff-virtual",
+    runtimeProfile: "beckhoff-virtual-v1",
+    capability: transparentBeckhoffCapability,
+    identity: "",
+    descriptorCount: 0,
+    supportTypeCount: 0,
+    qualified: false,
+  };
+}
+
+export function expectedTransparentBeckhoffSimulation(): BeckhoffSimulationIdentity {
+  return {
+    profile: "beckhoff-virtual",
+    runtimeProfile: "beckhoff-virtual-v1",
+    capability: transparentBeckhoffCapability,
+    identity: testedBeckhoffSimulationIdentity,
+    descriptorCount: expectedBeckhoffDescriptorCount,
+    supportTypeCount: expectedBeckhoffSupportTypeCount,
+    qualified: true,
+  };
+}
+
 export class StrucppBackend {
   async check(): Promise<BackendCheckResult> {
     const diagnostics: Diagnostic[] = [];
@@ -139,6 +172,7 @@ export class StrucppBackend {
         backend: "strucpp",
         available: false,
         testedVersion: testedStrucppVersion,
+        beckhoffSimulation: unavailableBeckhoffSimulation(),
         ...standardFunctionBlockQualification(undefined, false),
         diagnostics:
           diagnostics.length > 0
@@ -168,6 +202,8 @@ export class StrucppBackend {
         backend.standardFunctionBlockContracts,
         runtimeIntegrity && gpp.available,
       ),
+      beckhoffSimulation:
+        backend.beckhoffSimulation ?? unavailableBeckhoffSimulation(),
       diagnostics,
     };
   }
@@ -179,8 +215,6 @@ export class StrucppBackend {
       timeoutMs?: number;
       signal?: AbortSignal;
       onTestResult?: (test: BackendRunResult["tests"][number]) => void;
-      virtualFixturePath?: string;
-      libraryProfile?: string;
     } = {},
   ): Promise<BackendRunResult> {
     const diagnostics: Diagnostic[] = [];
@@ -210,6 +244,7 @@ export class StrucppBackend {
                 ),
               ],
         tests: [],
+        beckhoffSimulation: unavailableBeckhoffSimulation(),
         ...standardFunctionBlockQualification(undefined, false),
       };
     }
@@ -229,6 +264,8 @@ export class StrucppBackend {
         durationMs: 0,
         diagnostics,
         tests: [],
+        beckhoffSimulation:
+          backend.beckhoffSimulation ?? unavailableBeckhoffSimulation(),
         ...standardFunctionBlockQualification(
           backend.standardFunctionBlockContracts,
           false,
@@ -251,6 +288,8 @@ export class StrucppBackend {
         durationMs: 0,
         diagnostics,
         tests: [],
+        beckhoffSimulation:
+          backend.beckhoffSimulation ?? unavailableBeckhoffSimulation(),
         ...standardFunctionBlockQualification(
           backend.standardFunctionBlockContracts,
           false,
@@ -264,12 +303,6 @@ export class StrucppBackend {
     );
     const args = [
       ...sourcePaths,
-      ...(options.libraryProfile
-        ? ["--library-profile", options.libraryProfile]
-        : []),
-      ...(options.virtualFixturePath
-        ? ["--virtual-fixture", options.virtualFixturePath]
-        : []),
       "--gpp",
       gpp.executable,
       "--test",
@@ -331,6 +364,8 @@ export class StrucppBackend {
         durationMs: Date.now() - started,
         diagnostics,
         tests: [],
+        beckhoffSimulation:
+          backend.beckhoffSimulation ?? unavailableBeckhoffSimulation(),
         ...standardFunctionBlockQualification(
           backend.standardFunctionBlockContracts,
           true,
@@ -358,6 +393,8 @@ export class StrucppBackend {
         durationMs: Date.now() - started,
         diagnostics,
         tests: [],
+        beckhoffSimulation:
+          backend.beckhoffSimulation ?? unavailableBeckhoffSimulation(),
         ...standardFunctionBlockQualification(
           backend.standardFunctionBlockContracts,
           true,
@@ -401,6 +438,8 @@ export class StrucppBackend {
       durationMs: Date.now() - started,
       diagnostics,
       tests,
+      beckhoffSimulation:
+        backend.beckhoffSimulation ?? unavailableBeckhoffSimulation(),
       ...standardFunctionBlockQualification(
         backend.standardFunctionBlockContracts,
         true,
@@ -552,8 +591,16 @@ async function resolveRuntimeCompatibleStrucpp(
       selectedDiagnostics,
     )
   ) {
+    const beckhoffSimulation = await readTransparentBeckhoffSimulation(
+      selected.command,
+      selectedDiagnostics,
+    );
+    if (!beckhoffSimulation) {
+      diagnostics.push(...selectedDiagnostics);
+      return undefined;
+    }
     diagnostics.push(...selectedDiagnostics);
-    return selected;
+    return { ...selected, beckhoffSimulation };
   }
 
   const bundledPath = resolvePackFile(bundledStrucppRelativePath);
@@ -600,8 +647,79 @@ async function resolveRuntimeCompatibleStrucpp(
     diagnostics.push(...bundledDiagnostics);
     return undefined;
   }
+  const beckhoffSimulation = await readTransparentBeckhoffSimulation(
+    bundled.command,
+    bundledDiagnostics,
+  );
+  if (!beckhoffSimulation) {
+    diagnostics.push(...bundledDiagnostics);
+    return undefined;
+  }
   diagnostics.push(...bundledDiagnostics);
-  return bundled;
+  return { ...bundled, beckhoffSimulation };
+}
+
+async function readTransparentBeckhoffSimulation(
+  command: ResolvedCommand,
+  diagnostics: Diagnostic[],
+): Promise<BeckhoffSimulationIdentity | undefined> {
+  const result = await spawnWithTimeout(command, ["--simulation-info"], 5_000);
+  if (result.exitCode !== 0) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "BECKHOFF_SIMULATION_INFO_UNAVAILABLE",
+        "The pinned STruC++ runtime did not provide its transparent Beckhoff simulation identity. Run TcGen installer Repair.",
+        { sourceKind: "backend" },
+      ),
+    );
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(result.stdout || result.stderr) as {
+      profile?: unknown;
+      runtimeProfile?: unknown;
+      simulationIdentity?: unknown;
+      capabilities?: unknown;
+      descriptorCount?: unknown;
+      supportTypeCount?: unknown;
+      qualified?: unknown;
+    };
+    const capabilities = Array.isArray(parsed.capabilities)
+      ? parsed.capabilities.map(String)
+      : [];
+    const identity = String(parsed.simulationIdentity ?? "");
+    const descriptorCount = Number(parsed.descriptorCount);
+    const supportTypeCount = Number(parsed.supportTypeCount);
+    const qualified =
+      parsed.profile === "beckhoff-virtual" &&
+      parsed.runtimeProfile === "beckhoff-virtual-v1" &&
+      capabilities.includes(transparentBeckhoffCapability) &&
+      identity === testedBeckhoffSimulationIdentity &&
+      descriptorCount === expectedBeckhoffDescriptorCount &&
+      supportTypeCount === expectedBeckhoffSupportTypeCount &&
+      parsed.qualified === true;
+    if (!qualified) throw new Error("identity or coverage is incomplete");
+    return {
+      profile: "beckhoff-virtual",
+      runtimeProfile: "beckhoff-virtual-v1",
+      capability: transparentBeckhoffCapability,
+      identity,
+      descriptorCount,
+      supportTypeCount,
+      qualified: true,
+    };
+  } catch (error) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "BECKHOFF_SIMULATION_UNQUALIFIED",
+        `The pinned STruC++ transparent Beckhoff simulation failed qualification: ${error instanceof Error ? error.message : String(error)}. Run TcGen installer Repair.`,
+        { sourceKind: "backend" },
+      ),
+    );
+    return undefined;
+  }
 }
 
 async function resolveBundledStrucpp(
@@ -848,6 +966,7 @@ export async function verifyRuntimeManifest(
       "backend/libs/profiles/beckhoff-virtual.json",
       "backend/libs/beckhoff-virtual/beckhoff-virtual-core.stlib",
       "backend/libs/sources/beckhoff-virtual-core/beckhoff-api-catalog.json",
+      "backend/libs/sources/beckhoff-virtual-core/beckhoff-simulation-catalog.json",
       "backend/runtime/include/beckhoff_virtual.hpp",
       "toolchain/mingw64/bin/g++.exe",
     ]);
@@ -893,12 +1012,18 @@ export async function verifyRuntimeManifest(
       schemaVersion?: number;
       name?: string;
       runtimeProfile?: string;
+      simulationIdentity?: string;
+      capabilities?: string[];
       libraries?: Array<{ name?: string; path?: string }>;
     };
     if (
       profile.schemaVersion !== 1 ||
       profile.name !== "beckhoff-virtual" ||
       profile.runtimeProfile !== "beckhoff-virtual-v1" ||
+      !/^beckhoff-transparent:[a-f0-9]{64}$/.test(
+        profile.simulationIdentity ?? "",
+      ) ||
+      !profile.capabilities?.includes(transparentBeckhoffCapability) ||
       !Array.isArray(profile.libraries) ||
       profile.libraries.length === 0
     ) {
@@ -944,6 +1069,37 @@ export async function verifyRuntimeManifest(
       coverageCatalog.coverage.libraryIdentities !== 34
     ) {
       throw new Error("Beckhoff coverage catalog identity is invalid");
+    }
+    const simulationCatalog = JSON.parse(
+      (
+        await readFile(
+          join(
+            root,
+            "backend",
+            "libs",
+            "sources",
+            "beckhoff-virtual-core",
+            "beckhoff-simulation-catalog.json",
+          ),
+          "utf8",
+        )
+      ).replace(/^\uFEFF/, ""),
+    ) as {
+      schemaVersion?: number;
+      capability?: string;
+      descriptors?: Array<{ target?: string }>;
+      supportTypes?: Array<{ name?: string; disposition?: string }>;
+    };
+    if (
+      simulationCatalog.schemaVersion !== 1 ||
+      simulationCatalog.capability !== transparentBeckhoffCapability ||
+      simulationCatalog.descriptors?.length !== expectedBeckhoffDescriptorCount ||
+      new Set(simulationCatalog.descriptors?.map((item) => item.target)).size !==
+        expectedBeckhoffDescriptorCount ||
+      simulationCatalog.supportTypes?.length !== expectedBeckhoffSupportTypeCount ||
+      !simulationCatalog.supportTypes.every((item) => Boolean(item.disposition))
+    ) {
+      throw new Error("Beckhoff simulation catalog identity is invalid");
     }
     if (requiredPaths.size > 0) {
       throw new Error(`manifest is missing ${[...requiredPaths].join(", ")}`);
@@ -1833,6 +1989,13 @@ export function classifyBackendRun(
   tests: BackendRunResult["tests"],
 ): BackendRunResult["status"] {
   const combined = `${stdout}\n${stderr}`;
+  if (
+    /BECKHOFF_SIMULATION_(?:UNSUPPORTED|UNQUALIFIED|INTEGRITY)|Beckhoff simulation catalog coverage mismatch|Missing simulation descriptor/i.test(
+      combined,
+    )
+  ) {
+    return "backend_error";
+  }
   if (tests.some((test) => test.status === "failed")) return "failed";
   if (
     /^\s*FAIL:/im.test(combined) ||

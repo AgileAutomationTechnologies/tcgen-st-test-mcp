@@ -9,6 +9,7 @@ import { SemanticTestReport } from "../src/domain/models.js";
 import { toolHandlers } from "../src/mcp/tools.js";
 import {
   loadRequest,
+  fakeSimulationInfoScriptLines,
   loadTestFixture,
   localStrucppRepo,
   qualifiedCompilerContractFixture,
@@ -31,7 +32,7 @@ describe("failure paths", () => {
       executionAttempted: false,
       executable: "strucpp-win.exe",
       cliMode: "native",
-      version: "0.5.13-tcgen.5",
+      version: "0.5.13-tcgen.6",
       stdout: "",
       stderr: "",
       exitCode: null,
@@ -107,9 +108,10 @@ describe("failure paths", () => {
       fakeCli,
       [
         "if (process.argv.includes('--version')) {",
-        "  console.log('STruC++ version 0.5.13-tcgen.5');",
+        "  console.log('STruC++ version 0.5.13-tcgen.6');",
         "  process.exit(0);",
         "}",
+        ...fakeSimulationInfoScriptLines(),
         "if (process.argv.some(value => value.endsWith('runtime_self_test.st'))) {",
         "  console.log('PASS: tcgen-runtime-self-test');",
         "  process.exit(0);",
@@ -150,9 +152,10 @@ describe("failure paths", () => {
       fakeCli,
       [
         "if (process.argv.includes('--version')) {",
-        "  console.log('STruC++ version 0.5.13-tcgen.5');",
+        "  console.log('STruC++ version 0.5.13-tcgen.6');",
         "  process.exit(0);",
         "}",
+        ...fakeSimulationInfoScriptLines(),
         "if (process.argv.some(value => value.endsWith('runtime_self_test.st'))) {",
         "  console.log('PASS: tcgen-runtime-self-test');",
         "  process.exit(0);",

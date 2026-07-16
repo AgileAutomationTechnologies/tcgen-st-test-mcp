@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { FrameworkTestConfig, NormalizeRequest, TcGenTestSpec } from "../src/domain/models.js";
+import { expectedTransparentBeckhoffSimulation } from "../src/backends/StrucppBackend.js";
 
 export const exampleNames = [
   "adder",
@@ -17,6 +18,26 @@ export const exampleNames = [
 ];
 
 export type FixtureRequest = NormalizeRequest & { testSpec?: TcGenTestSpec; frameworkTest?: FrameworkTestConfig };
+
+export function fakeSimulationInfoScriptLines(): string[] {
+  const simulation = expectedTransparentBeckhoffSimulation();
+  const cliInfo = {
+    schemaVersion: 1,
+    profile: simulation.profile,
+    runtimeProfile: simulation.runtimeProfile,
+    simulationIdentity: simulation.identity,
+    capabilities: [simulation.capability],
+    descriptorCount: simulation.descriptorCount,
+    supportTypeCount: simulation.supportTypeCount,
+    qualified: simulation.qualified,
+  };
+  return [
+    "if (process.argv.includes('--simulation-info')) {",
+    `  console.log(${JSON.stringify(JSON.stringify(cliInfo))});`,
+    "  process.exit(0);",
+    "}",
+  ];
+}
 
 export function qualifiedCompilerContractFixture(): Record<string, unknown> {
   const payload = {

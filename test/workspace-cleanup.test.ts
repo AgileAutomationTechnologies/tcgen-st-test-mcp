@@ -6,7 +6,7 @@ import { StrucppBackend } from "../src/backends/StrucppBackend.js";
 import { SemanticTestReport } from "../src/domain/models.js";
 import { toolHandlers } from "../src/mcp/tools.js";
 import { WorkspaceManager } from "../src/workspace/WorkspaceManager.js";
-import { loadRequest, qualifiedCompilerContractFixture, withEnv } from "./helpers.js";
+import { fakeSimulationInfoScriptLines, loadRequest, qualifiedCompilerContractFixture, withEnv } from "./helpers.js";
 
 describe("semantic workspace cleanup", () => {
   it("removes a completed semantic workspace with bounded retry options", async () => {
@@ -163,9 +163,10 @@ async function createHangingFixture(manager: WorkspaceManager): Promise<string> 
         "import { writeFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
         "if (process.argv.includes('--version')) {",
-        "  console.log('STruC++ version 0.5.13-tcgen.5');",
+        "  console.log('STruC++ version 0.5.13-tcgen.6');",
         "  process.exit(0);",
         "}",
+        ...fakeSimulationInfoScriptLines(),
         "if (process.argv.some(value => value.endsWith('runtime_self_test.st'))) {",
         "  console.log('PASS: tcgen-runtime-self-test');",
         "  process.exit(0);",

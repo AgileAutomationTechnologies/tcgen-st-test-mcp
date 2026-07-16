@@ -1,6 +1,6 @@
 {
   "name": "tcgen-st-test-mcp",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "Offline TcGen Structured Text semantic test MCP server backed by STruC++.",
   "type": "module",
   "repository": {
@@ -19,7 +19,7 @@
     "node": ">=22.0.0"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/clean-dist.mjs && tsc",
     "bundle": "npm run build && node scripts/build-bundle.mjs",
     "build:exe": "npm run bundle && pkg dist/tcgen-st-test-mcp.cjs --no-bytecode --public-packages \"*\" --public --targets node22-win-x64 --output dist/tcgen-st-test-mcp.exe --compress GZip",
     "export:semantic-report-contract": "npm run build && node scripts/export-semantic-report-contract.mjs",

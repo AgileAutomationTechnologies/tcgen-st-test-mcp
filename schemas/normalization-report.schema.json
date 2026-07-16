@@ -36,11 +36,7 @@
       "additionalProperties": false,
       "properties": {
         "request": { "type": "string" },
-        "normalizedSource": { "type": "string" },
-        "virtualEnvironmentSha256": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
-        }
+        "normalizedSource": { "type": "string" }
       }
     }
   },
@@ -108,10 +104,6 @@
         "candidateSourcePath": { "type": "string" },
         "candidateSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "dependencyBundleSha256": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
-        },
-        "virtualEnvironmentSha256": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
         },

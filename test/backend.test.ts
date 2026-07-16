@@ -8,6 +8,7 @@ import {
   backendChildEnvironment,
   classifyBackendRun,
   detectStrucppVersion,
+  expectedTransparentBeckhoffSimulation,
   testedStrucppVersion,
   verifyRuntimeManifest,
 } from "../src/backends/StrucppBackend.js";
@@ -20,6 +21,7 @@ import {
 import { generatedTestResultMismatch, toolHandlers } from "../src/mcp/tools.js";
 import {
   exampleNames,
+  fakeSimulationInfoScriptLines,
   loadRequest,
   localStrucppRepo,
   qualifiedCompilerContractFixture,
@@ -28,18 +30,18 @@ import {
 
 describe("STruC++ backend", () => {
   it("retains the complete qualified downstream SemVer identity", () => {
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.5")).toBe(
-      "0.5.13-tcgen.5",
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.6")).toBe(
+      "0.5.13-tcgen.6",
     );
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.5+win64.3")).toBe(
-      "0.5.13-tcgen.5+win64.3",
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.6+win64.3")).toBe(
+      "0.5.13-tcgen.6+win64.3",
     );
-    expect(detectStrucppVersion("0.5.13-tcgen.5")).toBe("0.5.13-tcgen.5");
-    expect(detectStrucppVersion("evil 0.5.13-tcgen.5 suffix")).toBeUndefined();
+    expect(detectStrucppVersion("0.5.13-tcgen.6")).toBe("0.5.13-tcgen.6");
+    expect(detectStrucppVersion("evil 0.5.13-tcgen.6 suffix")).toBeUndefined();
     expect(
-      detectStrucppVersion("STruC++ version 0.5.13-tcgen.5 extra"),
+      detectStrucppVersion("STruC++ version 0.5.13-tcgen.6 extra"),
     ).toBeUndefined();
-    expect(testedStrucppVersion).toBe("0.5.13-tcgen.5");
+    expect(testedStrucppVersion).toBe("0.5.13-tcgen.6");
   });
 
   it("rejects passing backend output that omits or invents generated tests", () => {
@@ -83,6 +85,17 @@ describe("STruC++ backend", () => {
         { name: "executes", status: "passed" },
       ]),
     ).toBe("passed");
+  });
+
+  it("routes simulator qualification failures as backend errors before assertions", () => {
+    expect(
+      classifyBackendRun(
+        1,
+        "FAIL: ordinary assertion\nBECKHOFF_SIMULATION_INTEGRITY: catalog mismatch",
+        "",
+        [{ name: "ordinary assertion", status: "failed" }],
+      ),
+    ).toBe("backend_error");
   });
 
   it("labels generated C++ harness diagnostics separately from candidate diagnostics", () => {
@@ -336,7 +349,7 @@ describe("STruC++ backend", () => {
         const check = await new StrucppBackend().check();
         expect(check.available).toBe(true);
         expect(["node", "native"]).toContain(check.cliMode);
-        expect(check.version).toContain("0.5.13-tcgen.5");
+        expect(check.version).toContain("0.5.13-tcgen.6");
       },
     );
   }, 120_000);
@@ -452,7 +465,7 @@ describe("STruC++ backend", () => {
           await writeFile(fakeCli, fakeSemanticRuntimeCli(true), "utf8");
           const repaired = await new StrucppBackend().check();
           expect(repaired.available).toBe(true);
-          expect(repaired.version).toBe("0.5.13-tcgen.5");
+          expect(repaired.version).toBe("0.5.13-tcgen.6");
         },
       );
     } finally {
@@ -668,6 +681,7 @@ async function createRuntimeManifestFixture(
   } = {},
 ): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "tcgen-runtime-manifest-"));
+  const simulation = expectedTransparentBeckhoffSimulation();
   const files: Record<string, string> = {
     "runtime/tcgen-st-test-mcp.exe": "mcp",
     "backend/strucpp-win.exe": "strucpp",
@@ -678,6 +692,8 @@ async function createRuntimeManifestFixture(
       schemaVersion: 1,
       name: "beckhoff-virtual",
       runtimeProfile: "beckhoff-virtual-v1",
+      simulationIdentity: simulation.identity,
+      capabilities: [simulation.capability],
       excludedLibraries: ["additional-function-blocks"],
       libraries: [
         { name: "iec-standard-fb", path: "iec-standard-fb.stlib" },
@@ -698,6 +714,22 @@ async function createRuntimeManifestFixture(
       JSON.stringify({
         schemaVersion: 1,
         coverage: { indexedPages: 688, libraryIdentities: 34 },
+      }),
+    "backend/libs/sources/beckhoff-virtual-core/beckhoff-simulation-catalog.json":
+      JSON.stringify({
+        schemaVersion: 1,
+        capability: simulation.capability,
+        descriptors: Array.from(
+          { length: simulation.descriptorCount },
+          (_, index) => ({ target: `Fixture.Symbol${index}` }),
+        ),
+        supportTypes: Array.from(
+          { length: simulation.supportTypeCount },
+          (_, index) => ({
+            name: `TYPE_${index}`,
+            disposition: "virtual-runtime-type",
+          }),
+        ),
       }),
   };
   if (!options.omitStandardLibrary)
@@ -740,9 +772,10 @@ function dirnameForTest(path: string): string {
 function fakeSemanticRuntimeCli(passes: boolean): string {
   return [
     "if (process.argv.includes('--version')) {",
-    "  console.log('STruC++ version 0.5.13-tcgen.5');",
+    "  console.log('STruC++ version 0.5.13-tcgen.6');",
     "  process.exit(0);",
     "}",
+    ...fakeSimulationInfoScriptLines(),
     passes
       ? "console.log('PASS: tcgen-runtime-self-test');"
       : "console.error(\"runtime_self_test.st:9: error: Undefined type 'TON'\");",

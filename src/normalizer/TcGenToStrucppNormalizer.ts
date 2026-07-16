@@ -23,7 +23,7 @@ export interface NormalizeResult {
   hashes: {
     request: string;
     normalizedSource?: string;
-    virtualEnvironmentSha256?: string;
+    beckhoffSimulationIdentity?: string;
   };
 }
 

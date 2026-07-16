@@ -186,7 +186,6 @@ export const normalizationReportSchema = {
       properties: {
         request: { type: "string" },
         normalizedSource: { type: "string" },
-        virtualEnvironmentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
       },
     },
   },
@@ -248,6 +247,7 @@ export const semanticReportSchema = {
             "candidateSourcePath",
             "candidateSha256",
             "dependencyBundleSha256",
+            "beckhoffSimulationIdentity",
           ],
         },
       ],
@@ -265,7 +265,7 @@ export const semanticReportSchema = {
     },
     backend: {
       type: "object",
-      required: ["name"],
+      required: ["name", "beckhoffSimulation"],
       additionalProperties: false,
       properties: {
         name: { const: "strucpp" },
@@ -278,6 +278,7 @@ export const semanticReportSchema = {
           $ref: "#/$defs/standardFunctionBlockContracts",
         },
         standardFunctionBlockContractQualified: { type: "boolean" },
+        beckhoffSimulation: { $ref: "#/$defs/beckhoffSimulationIdentity" },
       },
     },
     normalization: { $ref: "#/$defs/normalizationSummary" },
@@ -345,13 +346,16 @@ export const semanticReportSchema = {
     },
     hashes: {
       type: "object",
-      required: ["request", "testSource"],
+      required: ["request", "testSource", "beckhoffSimulationIdentity"],
       additionalProperties: false,
       properties: {
         request: { type: "string" },
         normalizedSource: { type: "string" },
         testSource: { type: "string" },
-        virtualEnvironmentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        beckhoffSimulationIdentity: {
+          type: "string",
+          pattern: "^beckhoff-transparent:[a-f0-9]{64}$",
+        },
       },
     },
     qualification: { type: "string", minLength: 1 },
@@ -431,7 +435,10 @@ function commonReportDefs() {
         candidateSourcePath: { type: "string" },
         candidateSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
         dependencyBundleSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
-        virtualEnvironmentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        beckhoffSimulationIdentity: {
+          type: "string",
+          pattern: "^beckhoff-transparent:[a-f0-9]{64}$",
+        },
         discoveredFrameworkTests: {
           type: "array",
           uniqueItems: true,
@@ -589,6 +596,31 @@ function commonReportDefs() {
           uniqueItems: true,
           items: { type: "string", minLength: 1 },
         },
+      },
+    },
+    beckhoffSimulationIdentity: {
+      type: "object",
+      required: [
+        "profile",
+        "runtimeProfile",
+        "capability",
+        "identity",
+        "descriptorCount",
+        "supportTypeCount",
+        "qualified",
+      ],
+      additionalProperties: false,
+      properties: {
+        profile: { const: "beckhoff-virtual" },
+        runtimeProfile: { const: "beckhoff-virtual-v1" },
+        capability: { const: "beckhoffVirtualTransparentExecutionV1" },
+        identity: {
+          type: "string",
+          pattern: "^(?:beckhoff-transparent:[a-f0-9]{64})?$",
+        },
+        descriptorCount: { type: "integer", minimum: 0 },
+        supportTypeCount: { type: "integer", minimum: 0 },
+        qualified: { type: "boolean" },
       },
     },
     standardFunctionBlockContracts: {

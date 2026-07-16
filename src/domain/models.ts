@@ -136,7 +136,6 @@ export interface NormalizeRequest {
     candidateCompilePreflight?: boolean;
     executionPurpose?: "candidate_compile_preflight";
   };
-  virtualEnvironment?: BeckhoffVirtualEnvironment;
 }
 
 export interface SemanticTestSubject {
@@ -145,42 +144,17 @@ export interface SemanticTestSubject {
   dependencyBundleSha256?: string;
   discoveredFrameworkTests?: string[];
   selectedFrameworkTests?: string[];
-  virtualEnvironmentSha256?: string;
+  beckhoffSimulationIdentity?: string;
 }
 
-export type BeckhoffVirtualResourceKind =
-  | "adsSymbol"
-  | "sandboxFile"
-  | "motionAxis"
-  | "fieldbusDevice"
-  | "registerBank"
-  | "messageEndpoint"
-  | "transferEndpoint"
-  | "opcUaNode"
-  | "databaseTable"
-  | "diagnosticParameter";
-
-export interface BeckhoffVirtualResource {
-  kind: BeckhoffVirtualResourceKind;
-  key: string;
-  [field: string]: unknown;
-}
-
-export interface BeckhoffVirtualEnvironment {
-  schemaVersion: 1;
-  profile: "beckhoff-virtual-v1";
-  scanPeriodNanoseconds?: number;
-  monotonicNanoseconds?: number;
-  utcUnixNanoseconds?: number;
-  timeZone?: string;
-  resources?: BeckhoffVirtualResource[];
-  faults?: Array<{
-    target: string;
-    resourceKey?: string;
-    callNumber?: number;
-    delayScans?: number;
-    errorId?: number;
-  }>;
+export interface BeckhoffSimulationIdentity {
+  profile: "beckhoff-virtual";
+  runtimeProfile: "beckhoff-virtual-v1";
+  capability: "beckhoffVirtualTransparentExecutionV1";
+  identity: string;
+  descriptorCount: number;
+  supportTypeCount: number;
+  qualified: boolean;
 }
 
 export type JsonValue =
@@ -332,6 +306,7 @@ export interface BackendCheckResult {
   gppExecutable?: string;
   standardFunctionBlockContracts: StandardFunctionBlockContracts;
   standardFunctionBlockContractQualified: boolean;
+  beckhoffSimulation: BeckhoffSimulationIdentity;
   diagnostics: Diagnostic[];
 }
 
@@ -359,6 +334,7 @@ export interface SemanticTestReport {
     gppExecutable?: string;
     standardFunctionBlockContracts: StandardFunctionBlockContracts;
     standardFunctionBlockContractQualified: boolean;
+    beckhoffSimulation: BeckhoffSimulationIdentity;
   };
   normalization: NormalizationSummary;
   summary: {
@@ -390,7 +366,7 @@ export interface SemanticTestReport {
     request: string;
     normalizedSource?: string;
     testSource: string;
-    virtualEnvironmentSha256?: string;
+    beckhoffSimulationIdentity?: string;
   };
   qualification: string;
 }
