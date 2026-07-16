@@ -67,8 +67,8 @@ describe("qualified standard function-block contracts", () => {
       STRUCPP_GPP_PATH: process.execPath
     }, async () => {
       const check = await new StrucppBackend().check();
-      expect(check.testedVersion).toBe("0.5.13-tcgen.4");
-      expect(testedStrucppVersion).toBe("0.5.13-tcgen.4");
+      expect(check.testedVersion).toBe("0.5.13-tcgen.5");
+      expect(testedStrucppVersion).toBe("0.5.13-tcgen.5");
       expect(check.standardFunctionBlockContracts).toEqual(
         unavailableStandardFunctionBlockContracts()
       );

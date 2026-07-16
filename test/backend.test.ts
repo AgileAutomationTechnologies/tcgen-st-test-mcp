@@ -28,18 +28,18 @@ import {
 
 describe("STruC++ backend", () => {
   it("retains the complete qualified downstream SemVer identity", () => {
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.4")).toBe(
-      "0.5.13-tcgen.4",
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.5")).toBe(
+      "0.5.13-tcgen.5",
     );
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.4+win64.3")).toBe(
-      "0.5.13-tcgen.4+win64.3",
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.5+win64.3")).toBe(
+      "0.5.13-tcgen.5+win64.3",
     );
-    expect(detectStrucppVersion("0.5.13-tcgen.4")).toBe("0.5.13-tcgen.4");
-    expect(detectStrucppVersion("evil 0.5.13-tcgen.4 suffix")).toBeUndefined();
+    expect(detectStrucppVersion("0.5.13-tcgen.5")).toBe("0.5.13-tcgen.5");
+    expect(detectStrucppVersion("evil 0.5.13-tcgen.5 suffix")).toBeUndefined();
     expect(
-      detectStrucppVersion("STruC++ version 0.5.13-tcgen.4 extra"),
+      detectStrucppVersion("STruC++ version 0.5.13-tcgen.5 extra"),
     ).toBeUndefined();
-    expect(testedStrucppVersion).toBe("0.5.13-tcgen.4");
+    expect(testedStrucppVersion).toBe("0.5.13-tcgen.5");
   });
 
   it("rejects passing backend output that omits or invents generated tests", () => {
@@ -336,7 +336,7 @@ describe("STruC++ backend", () => {
         const check = await new StrucppBackend().check();
         expect(check.available).toBe(true);
         expect(["node", "native"]).toContain(check.cliMode);
-        expect(check.version).toContain("0.5.13-tcgen.4");
+        expect(check.version).toContain("0.5.13-tcgen.5");
       },
     );
   }, 120_000);
@@ -452,7 +452,7 @@ describe("STruC++ backend", () => {
           await writeFile(fakeCli, fakeSemanticRuntimeCli(true), "utf8");
           const repaired = await new StrucppBackend().check();
           expect(repaired.available).toBe(true);
-          expect(repaired.version).toBe("0.5.13-tcgen.4");
+          expect(repaired.version).toBe("0.5.13-tcgen.5");
         },
       );
     } finally {
@@ -740,7 +740,7 @@ function dirnameForTest(path: string): string {
 function fakeSemanticRuntimeCli(passes: boolean): string {
   return [
     "if (process.argv.includes('--version')) {",
-    "  console.log('STruC++ version 0.5.13-tcgen.4');",
+    "  console.log('STruC++ version 0.5.13-tcgen.5');",
     "  process.exit(0);",
     "}",
     passes

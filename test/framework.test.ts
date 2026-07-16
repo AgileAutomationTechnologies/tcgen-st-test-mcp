@@ -11,7 +11,7 @@ describe("framework-style semantic tests", () => {
       executionAttempted: true,
       executable: "strucpp-win.exe",
       cliMode: "native",
-      version: "STruC++ version 0.5.13-tcgen.4",
+      version: "STruC++ version 0.5.13-tcgen.5",
       stdout: "PASS: stale framework test",
       stderr: "",
       exitCode: 0,

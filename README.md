@@ -265,12 +265,12 @@ requires a real external Node executable through `TCGEN_ST_NODE_PATH` or PATH;
 the packaged MCP refuses to recursively use itself as Node. Prefer native
 `strucpp-win.exe` in product installations, which needs no external Node.
 
-The v0.8.2 Windows validation target is the AgileAutomationTechnologies STruC++
-downstream release at commit `eca6ff87dc28b804298944ed4ee6e633afad368d`,
+The v0.8.3 Windows validation target is the AgileAutomationTechnologies STruC++
+downstream release at commit `c79da8119301064db3614475dd8b237bdbfd1b16`,
 based on upstream STruC++ `0.5.13` plus the qualified TcGen downstream patch set,
-identified as `0.5.13-tcgen.4`.
+identified as `0.5.13-tcgen.5`.
 Backend checks and semantic runs fail closed when the detected STruC++ version
-is missing or differs from the complete `0.5.13-tcgen.4` distribution version.
+is missing or differs from the complete `0.5.13-tcgen.5` distribution version.
 
 ## Verification
 
@@ -286,7 +286,7 @@ Release automation can export a deterministic, complete Framework assertion
 report contract after building the package:
 
 ```powershell
-npm run export:semantic-report-contract -- C:\temp\mcp-0.8.2-framework-assertion-report.json
+npm run export:semantic-report-contract -- C:\temp\mcp-0.8.3-framework-assertion-report.json
 ```
 
 The exported JSON contains the current `mcpVersion` and intentionally omits
