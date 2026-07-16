@@ -8,7 +8,7 @@ Autonomy / OpenPLC Project under GPL-3.0-or-later:
 https://github.com/Autonomy-Logic/STruCpp
 
 The v0.8.2 compatibility target is the TcGen STruC++ distribution
-`0.5.13-tcgen.3`, based on upstream STruC++ 0.5.13. The Windows runtime
+`0.5.13-tcgen.4`, based on upstream STruC++ 0.5.13. The Windows runtime
 slice is pinned to AgileAutomationTechnologies commit
 `eca6ff87dc28b804298944ed4ee6e633afad368d`, including the required
 Windows/compiler-launch, TwinCAT short-circuit, and qualified RS/SR named-pin

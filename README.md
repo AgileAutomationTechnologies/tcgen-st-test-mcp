@@ -268,9 +268,9 @@ the packaged MCP refuses to recursively use itself as Node. Prefer native
 The v0.8.2 Windows validation target is the AgileAutomationTechnologies STruC++
 downstream release at commit `eca6ff87dc28b804298944ed4ee6e633afad368d`,
 based on upstream STruC++ `0.5.13` plus the qualified TcGen downstream patch set,
-identified as `0.5.13-tcgen.3`.
+identified as `0.5.13-tcgen.4`.
 Backend checks and semantic runs fail closed when the detected STruC++ version
-is missing or differs from the complete `0.5.13-tcgen.3` distribution version.
+is missing or differs from the complete `0.5.13-tcgen.4` distribution version.
 
 ## Verification
 

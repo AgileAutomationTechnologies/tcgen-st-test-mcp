@@ -201,7 +201,7 @@ describe("Framework multi-scan execution contract", () => {
       executionAttempted: true,
       executable: "strucpp-win.exe",
       cliMode: "native",
-      version: "STruC++ version 0.5.13-tcgen.3",
+      version: "STruC++ version 0.5.13-tcgen.4",
       stdout: "ASSERT_TRUE failed: tcframework_execute_complete expected TRUE, got FALSE\nFAIL: framework FB_Test_LimitCounter",
       stderr: "",
       exitCode: 1,

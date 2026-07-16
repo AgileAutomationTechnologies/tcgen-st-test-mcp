@@ -49,7 +49,8 @@ export interface Diagnostic {
   blocking: boolean;
   code: string;
   message: string;
-  sourceKind?: "generated_test_harness" | "candidate" | "backend" | "mixed" | "unknown";
+  sourceKind?:
+    "generated_test_harness" | "candidate" | "backend" | "mixed" | "unknown";
   original?: SourceSpan;
   generated?: SourceSpan;
   object?: string;
@@ -123,7 +124,11 @@ export interface NormalizeRequest {
   profile?: "tcgen-strucpp-v1";
   candidateSourcePath: string;
   sources: SourceFile[];
-  scope?: { mode: "all" | "entrypoints"; entrypoints?: string[]; additionalSymbols?: string[] };
+  scope?: {
+    mode: "all" | "entrypoints";
+    entrypoints?: string[];
+    additionalSymbols?: string[];
+  };
   options?: {
     strict?: boolean;
     includeNormalizedSources?: boolean;
@@ -131,6 +136,7 @@ export interface NormalizeRequest {
     candidateCompilePreflight?: boolean;
     executionPurpose?: "candidate_compile_preflight";
   };
+  virtualEnvironment?: BeckhoffVirtualEnvironment;
 }
 
 export interface SemanticTestSubject {
@@ -139,9 +145,46 @@ export interface SemanticTestSubject {
   dependencyBundleSha256?: string;
   discoveredFrameworkTests?: string[];
   selectedFrameworkTests?: string[];
+  virtualEnvironmentSha256?: string;
 }
 
-export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+export type BeckhoffVirtualResourceKind =
+  | "adsSymbol"
+  | "sandboxFile"
+  | "motionAxis"
+  | "fieldbusDevice"
+  | "registerBank"
+  | "messageEndpoint"
+  | "transferEndpoint"
+  | "opcUaNode"
+  | "databaseTable"
+  | "diagnosticParameter";
+
+export interface BeckhoffVirtualResource {
+  kind: BeckhoffVirtualResourceKind;
+  key: string;
+  [field: string]: unknown;
+}
+
+export interface BeckhoffVirtualEnvironment {
+  schemaVersion: 1;
+  profile: "beckhoff-virtual-v1";
+  scanPeriodNanoseconds?: number;
+  monotonicNanoseconds?: number;
+  utcUnixNanoseconds?: number;
+  timeZone?: string;
+  resources?: BeckhoffVirtualResource[];
+  faults?: Array<{
+    target: string;
+    resourceKey?: string;
+    callNumber?: number;
+    delayScans?: number;
+    errorId?: number;
+  }>;
+}
+
+export type JsonValue =
+  string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 export interface TcGenTestSpec {
   schemaVersion: 1;
@@ -257,10 +300,20 @@ export interface StandardFunctionBlockContracts {
 
 export type TestStep =
   | { kind: "set"; path: string; value: JsonValue }
-  | { kind: "call"; target?: string; arguments?: Record<string, JsonValue>; cycles?: number }
+  | {
+      kind: "call";
+      target?: string;
+      arguments?: Record<string, JsonValue>;
+      cycles?: number;
+    }
   | { kind: "advanceTime"; nanoseconds: number }
   | { kind: "expectEquals"; path: string; value: JsonValue; message?: string }
-  | { kind: "expectNotEquals"; path: string; value: JsonValue; message?: string }
+  | {
+      kind: "expectNotEquals";
+      path: string;
+      value: JsonValue;
+      message?: string;
+    }
   | { kind: "expectTrue"; path: string; message?: string }
   | { kind: "expectFalse"; path: string; message?: string }
   | { kind: "expectGreaterThan"; path: string; value: number; message?: string }
@@ -318,7 +371,11 @@ export interface SemanticTestReport {
     unsupported: number;
     total: number;
   };
-  tests: Array<{ name: string; status: "passed" | "failed" | "skipped"; message?: string }>;
+  tests: Array<{
+    name: string;
+    status: "passed" | "failed" | "skipped";
+    message?: string;
+  }>;
   diagnostics: Diagnostic[];
   artifacts?: {
     normalizedFiles?: NormalizedFile[];
@@ -333,6 +390,7 @@ export interface SemanticTestReport {
     request: string;
     normalizedSource?: string;
     testSource: string;
+    virtualEnvironmentSha256?: string;
   };
   qualification: string;
 }
@@ -341,13 +399,13 @@ export function diagnostic(
   severity: Severity,
   code: string,
   message: string,
-  options: Partial<Diagnostic> = {}
+  options: Partial<Diagnostic> = {},
 ): Diagnostic {
   return {
     severity,
     code,
     message,
     blocking: severity === "error",
-    ...options
+    ...options,
   };
 }

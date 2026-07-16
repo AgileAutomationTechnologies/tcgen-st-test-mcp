@@ -3,13 +3,24 @@
   "$id": "https://tcgen.dev/schemas/normalization-report.schema.json",
   "title": "NormalizationReport",
   "type": "object",
-  "required": ["schemaVersion", "subject", "parseStatus", "compatibilityStatus", "normalizedFiles", "normalization", "diagnostics", "hashes"],
+  "required": [
+    "schemaVersion",
+    "subject",
+    "parseStatus",
+    "compatibilityStatus",
+    "normalizedFiles",
+    "normalization",
+    "diagnostics",
+    "hashes"
+  ],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": { "const": 1 },
     "subject": { "$ref": "#/$defs/semanticTestSubject" },
     "parseStatus": { "enum": ["ok", "error"] },
-    "compatibilityStatus": { "enum": ["exact", "rewritten", "partial", "blocked"] },
+    "compatibilityStatus": {
+      "enum": ["exact", "rewritten", "partial", "blocked"]
+    },
     "normalizedFiles": {
       "type": "array",
       "items": { "$ref": "#/$defs/normalizedFile" }
@@ -25,7 +36,11 @@
       "additionalProperties": false,
       "properties": {
         "request": { "type": "string" },
-        "normalizedSource": { "type": "string" }
+        "normalizedSource": { "type": "string" },
+        "virtualEnvironmentSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
       }
     }
   },
@@ -60,7 +75,13 @@
     },
     "rewriteRecord": {
       "type": "object",
-      "required": ["ruleId", "originalText", "generatedText", "sourceSpan", "generatedSpan"],
+      "required": [
+        "ruleId",
+        "originalText",
+        "generatedText",
+        "sourceSpan",
+        "generatedSpan"
+      ],
       "additionalProperties": false,
       "properties": {
         "ruleId": { "type": "string" },
@@ -86,7 +107,14 @@
       "properties": {
         "candidateSourcePath": { "type": "string" },
         "candidateSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "dependencyBundleSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "dependencyBundleSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "virtualEnvironmentSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
         "discoveredFrameworkTests": {
           "type": "array",
           "uniqueItems": true,
@@ -101,7 +129,16 @@
     },
     "normalizationSummary": {
       "type": "object",
-      "required": ["profile", "status", "includedObjects", "omittedObjects", "blockedObjects", "symbolMap", "rewrites", "diagnostics"],
+      "required": [
+        "profile",
+        "status",
+        "includedObjects",
+        "omittedObjects",
+        "blockedObjects",
+        "symbolMap",
+        "rewrites",
+        "diagnostics"
+      ],
       "additionalProperties": false,
       "properties": {
         "profile": { "const": "tcgen-strucpp-v1" },

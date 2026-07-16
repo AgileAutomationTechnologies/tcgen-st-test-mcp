@@ -163,7 +163,7 @@ async function createHangingFixture(manager: WorkspaceManager): Promise<string> 
         "import { writeFileSync } from 'node:fs';",
         "import { join } from 'node:path';",
         "if (process.argv.includes('--version')) {",
-        "  console.log('STruC++ version 0.5.13-tcgen.3');",
+        "  console.log('STruC++ version 0.5.13-tcgen.4');",
         "  process.exit(0);",
         "}",
         "if (process.argv.some(value => value.endsWith('runtime_self_test.st'))) {",

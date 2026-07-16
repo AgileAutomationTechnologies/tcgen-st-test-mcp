@@ -49,6 +49,27 @@ describe("trusted framework target coverage", () => {
     expect(codes(result)).toContain("TCFRAMEWORK_TEST_SOURCE_HASH_MISMATCH");
   });
 
+  it("rejects a regressed framework test name before building an execution adapter", async () => {
+    const request = loadRequest("framework-limit-counter");
+    const testSource = request.sources.find(source => source.path === "test.st")!;
+    testSource.content = testSource.content.replaceAll(
+      "FB_Test_LimitCounter",
+      "FB_Test_LimitCntr"
+    );
+    request.frameworkTest!.targetMappings![0].testSourceSha256 = sha256(testSource.content);
+
+    const result = await generate(request);
+
+    expect(result.generatedTestFile.content).toBe("");
+    expect(codes(result)).toContain("TCFRAMEWORK_TEST_NOT_FOUND");
+    expect(codes(result)).toContain("TCFRAMEWORK_TARGET_TEST_NOT_SELECTED");
+    expect(result.frameworkTargetCoverage[0]).toMatchObject({
+      testFunctionBlock: "FB_Test_LimitCounter",
+      productionTarget: "FB_LimitCounter",
+      verified: false
+    });
+  });
+
   it("does not accept production names in strings or literal-only assertions as coverage", async () => {
     const request = loadRequest("framework-limit-counter");
     const testSource = request.sources.find(source => source.path === "test.st")!;

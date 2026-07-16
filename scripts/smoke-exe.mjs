@@ -15,12 +15,16 @@ const gppExecutable = process.env.STRUCPP_GPP_PATH || "C:\\msys64\\ucrt64\\bin\\
 if (!existsSync(gppExecutable)) {
   throw new Error("The standalone executable smoke test requires STRUCPP_GPP_PATH or C:\\msys64\\ucrt64\\bin\\g++.exe.");
 }
+const strucppExecutable = process.env.STRUCPP_PATH;
+if (!strucppExecutable || !existsSync(strucppExecutable)) {
+  throw new Error("The standalone executable smoke test requires STRUCPP_PATH to reference the pinned native STruC++ executable.");
+}
 const fakeStrucppCli = join(isolatedWorkingDirectory, "fake-strucpp.mjs");
 writeFileSync(
   fakeStrucppCli,
   [
     "if (process.argv.includes('--version')) {",
-    "  console.log('STruC++ version 0.5.12');",
+    "  console.log('STruC++ version 0.5.13-tcgen.4');",
     "  process.exit(0);",
     "}",
     "console.log('PASS: tcgen-runtime-self-test');",
@@ -39,9 +43,9 @@ const input = [
 try {
   const messages = invokeExecutable({
     ...process.env,
-    STRUCPP_PATH: fakeStrucppCli,
+    STRUCPP_PATH: strucppExecutable,
     STRUCPP_GPP_PATH: gppExecutable,
-    TCGEN_ST_NODE_PATH: process.execPath
+    TCGEN_ST_NODE_PATH: ""
   });
   const serverInfo = messages.find(message => message.id === 1)?.result?.serverInfo;
   const tools = messages.find(message => message.id === 2)?.result?.tools ?? [];
@@ -51,7 +55,7 @@ try {
     serverInfo?.version !== packageVersion ||
     tools.length !== 4 ||
     backendCheck?.available !== true ||
-    !String(backendCheck?.version ?? "").includes("0.5.12")
+    !String(backendCheck?.version ?? "").includes("0.5.13-tcgen.4")
   ) {
     throw new Error(
       `Unexpected executable MCP response: server=${serverInfo?.name}@${serverInfo?.version}; tools=${tools.length}; backend=${backendCheck?.available}@${backendCheck?.version}`

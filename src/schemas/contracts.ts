@@ -13,8 +13,8 @@ export const tcgenTestSpecSchema = {
       properties: {
         pouName: { type: "string", minLength: 1 },
         kind: { enum: ["FUNCTION_BLOCK", "FUNCTION", "PROGRAM"] },
-        instanceName: { type: "string", minLength: 1 }
-      }
+        instanceName: { type: "string", minLength: 1 },
+      },
     },
     setup: { type: "array", items: { $ref: "#/$defs/step" } },
     tests: {
@@ -26,10 +26,10 @@ export const tcgenTestSpecSchema = {
         additionalProperties: false,
         properties: {
           name: { type: "string", minLength: 1 },
-          steps: { type: "array", items: { $ref: "#/$defs/step" } }
-        }
-      }
-    }
+          steps: { type: "array", items: { $ref: "#/$defs/step" } },
+        },
+      },
+    },
   },
   $defs: {
     jsonValue: true,
@@ -42,8 +42,8 @@ export const tcgenTestSpecSchema = {
           properties: {
             kind: { const: "set" },
             path: { type: "string", minLength: 1 },
-            value: { $ref: "#/$defs/jsonValue" }
-          }
+            value: { $ref: "#/$defs/jsonValue" },
+          },
         },
         {
           type: "object",
@@ -53,8 +53,8 @@ export const tcgenTestSpecSchema = {
             kind: { const: "call" },
             target: { type: "string", minLength: 1 },
             arguments: { type: "object" },
-            cycles: { type: "integer", minimum: 1 }
-          }
+            cycles: { type: "integer", minimum: 1 },
+          },
         },
         {
           type: "object",
@@ -62,8 +62,8 @@ export const tcgenTestSpecSchema = {
           additionalProperties: false,
           properties: {
             kind: { const: "advanceTime" },
-            nanoseconds: { type: "integer", minimum: 0 }
-          }
+            nanoseconds: { type: "integer", minimum: 0 },
+          },
         },
         {
           type: "object",
@@ -73,8 +73,8 @@ export const tcgenTestSpecSchema = {
             kind: { enum: ["expectEquals", "expectNotEquals"] },
             path: { type: "string", minLength: 1 },
             value: { $ref: "#/$defs/jsonValue" },
-            message: { type: "string" }
-          }
+            message: { type: "string" },
+          },
         },
         {
           type: "object",
@@ -83,8 +83,8 @@ export const tcgenTestSpecSchema = {
           properties: {
             kind: { enum: ["expectTrue", "expectFalse"] },
             path: { type: "string", minLength: 1 },
-            message: { type: "string" }
-          }
+            message: { type: "string" },
+          },
         },
         {
           type: "object",
@@ -94,12 +94,12 @@ export const tcgenTestSpecSchema = {
             kind: { enum: ["expectGreaterThan", "expectLessThan"] },
             path: { type: "string", minLength: 1 },
             value: { type: "number" },
-            message: { type: "string" }
-          }
-        }
-      ]
-    }
-  }
+            message: { type: "string" },
+          },
+        },
+      ],
+    },
+  },
 } as const;
 
 const diagnosticSchema = {
@@ -111,7 +111,15 @@ const diagnosticSchema = {
     blocking: { type: "boolean" },
     code: { type: "string", minLength: 1 },
     message: { type: "string" },
-    sourceKind: { enum: ["generated_test_harness", "candidate", "backend", "mixed", "unknown"] },
+    sourceKind: {
+      enum: [
+        "generated_test_harness",
+        "candidate",
+        "backend",
+        "mixed",
+        "unknown",
+      ],
+    },
     original: { $ref: "#/$defs/sourceSpan" },
     generated: { $ref: "#/$defs/sourceSpan" },
     object: { type: "string" },
@@ -120,7 +128,13 @@ const diagnosticSchema = {
     detail: { const: "backend_incompatibility" },
     technicalEvidence: {
       type: "object",
-      required: ["kind", "channel", "content", "sourceKind", "generatedArtifacts"],
+      required: [
+        "kind",
+        "channel",
+        "content",
+        "sourceKind",
+        "generatedArtifacts",
+      ],
       additionalProperties: false,
       properties: {
         kind: { const: "compiler_output" },
@@ -130,17 +144,26 @@ const diagnosticSchema = {
         generatedArtifacts: {
           type: "array",
           uniqueItems: true,
-          items: { type: "string", minLength: 1 }
-        }
-      }
-    }
-  }
+          items: { type: "string", minLength: 1 },
+        },
+      },
+    },
+  },
 } as const;
 
 export const normalizationReportSchema = {
   $id: "https://tcgen.dev/schemas/normalization-report.schema.json",
   type: "object",
-  required: ["schemaVersion", "subject", "parseStatus", "compatibilityStatus", "normalizedFiles", "normalization", "diagnostics", "hashes"],
+  required: [
+    "schemaVersion",
+    "subject",
+    "parseStatus",
+    "compatibilityStatus",
+    "normalizedFiles",
+    "normalization",
+    "diagnostics",
+    "hashes",
+  ],
   additionalProperties: false,
   properties: {
     schemaVersion: { const: 1 },
@@ -149,12 +172,12 @@ export const normalizationReportSchema = {
     compatibilityStatus: { enum: ["exact", "rewritten", "partial", "blocked"] },
     normalizedFiles: {
       type: "array",
-      items: { $ref: "#/$defs/normalizedFile" }
+      items: { $ref: "#/$defs/normalizedFile" },
     },
     normalization: { $ref: "#/$defs/normalizationSummary" },
     diagnostics: {
       type: "array",
-      items: { $ref: "#/$defs/diagnostic" }
+      items: { $ref: "#/$defs/diagnostic" },
     },
     hashes: {
       type: "object",
@@ -162,11 +185,12 @@ export const normalizationReportSchema = {
       additionalProperties: false,
       properties: {
         request: { type: "string" },
-        normalizedSource: { type: "string" }
-      }
-    }
+        normalizedSource: { type: "string" },
+        virtualEnvironmentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+      },
+    },
   },
-  $defs: commonReportDefs()
+  $defs: commonReportDefs(),
 } as const;
 
 export const semanticReportSchema = {
@@ -185,7 +209,7 @@ export const semanticReportSchema = {
     "tests",
     "diagnostics",
     "hashes",
-    "qualification"
+    "qualification",
   ],
   additionalProperties: false,
   properties: {
@@ -195,34 +219,50 @@ export const semanticReportSchema = {
     coveredExecutableObjects: {
       type: "array",
       uniqueItems: true,
-      items: { type: "string", minLength: 1 }
+      items: { type: "string", minLength: 1 },
     },
     frameworkTargetCoverage: {
       type: "array",
-      items: { $ref: "#/$defs/frameworkTargetCoverage" }
+      items: { $ref: "#/$defs/frameworkTargetCoverage" },
     },
     assertions: {
       type: "array",
-      items: { $ref: "#/$defs/frameworkAssertionEvidence" }
+      items: { $ref: "#/$defs/frameworkAssertionEvidence" },
     },
     assertionLedger: { $ref: "#/$defs/frameworkAssertionLedger" },
     artifactIdentities: {
       type: "array",
       uniqueItems: true,
-      items: { $ref: "#/$defs/semanticArtifactIdentity" }
+      items: { $ref: "#/$defs/semanticArtifactIdentity" },
     },
     generatedTestNames: {
       type: "array",
       uniqueItems: true,
-      items: { type: "string", minLength: 1 }
+      items: { type: "string", minLength: 1 },
     },
     subject: {
       allOf: [
         { $ref: "#/$defs/semanticTestSubject" },
-        { required: ["candidateSourcePath", "candidateSha256", "dependencyBundleSha256"] }
-      ]
+        {
+          required: [
+            "candidateSourcePath",
+            "candidateSha256",
+            "dependencyBundleSha256",
+          ],
+        },
+      ],
     },
-    verdict: { enum: ["passed", "failed", "partial", "unsupported", "compile_error", "backend_error", "timeout"] },
+    verdict: {
+      enum: [
+        "passed",
+        "failed",
+        "partial",
+        "unsupported",
+        "compile_error",
+        "backend_error",
+        "timeout",
+      ],
+    },
     backend: {
       type: "object",
       required: ["name"],
@@ -234,14 +274,25 @@ export const semanticReportSchema = {
         executable: { type: "string" },
         cliMode: { enum: ["native", "node"] },
         gppExecutable: { type: "string" },
-        standardFunctionBlockContracts: { $ref: "#/$defs/standardFunctionBlockContracts" },
-        standardFunctionBlockContractQualified: { type: "boolean" }
-      }
+        standardFunctionBlockContracts: {
+          $ref: "#/$defs/standardFunctionBlockContracts",
+        },
+        standardFunctionBlockContractQualified: { type: "boolean" },
+      },
     },
     normalization: { $ref: "#/$defs/normalizationSummary" },
     summary: {
       type: "object",
-      required: ["passed", "failed", "skipped", "compileErrors", "runtimeErrors", "timedOut", "unsupported", "total"],
+      required: [
+        "passed",
+        "failed",
+        "skipped",
+        "compileErrors",
+        "runtimeErrors",
+        "timedOut",
+        "unsupported",
+        "total",
+      ],
       additionalProperties: false,
       properties: {
         passed: { type: "integer", minimum: 0 },
@@ -251,8 +302,8 @@ export const semanticReportSchema = {
         runtimeErrors: { type: "integer", minimum: 0 },
         timedOut: { type: "integer", minimum: 0 },
         unsupported: { type: "integer", minimum: 0 },
-        total: { type: "integer", minimum: 0 }
-      }
+        total: { type: "integer", minimum: 0 },
+      },
     },
     tests: {
       type: "array",
@@ -265,13 +316,13 @@ export const semanticReportSchema = {
           status: { enum: ["passed", "failed", "skipped"] },
           message: { type: "string" },
           startedAt: { type: "string", minLength: 1 },
-          completedAt: { type: "string", minLength: 1 }
-        }
-      }
+          completedAt: { type: "string", minLength: 1 },
+        },
+      },
     },
     diagnostics: {
       type: "array",
-      items: { $ref: "#/$defs/diagnostic" }
+      items: { $ref: "#/$defs/diagnostic" },
     },
     artifacts: {
       type: "object",
@@ -279,18 +330,18 @@ export const semanticReportSchema = {
       properties: {
         normalizedFiles: {
           type: "array",
-          items: { $ref: "#/$defs/normalizedFile" }
+          items: { $ref: "#/$defs/normalizedFile" },
         },
         testFile: { $ref: "#/$defs/normalizedFile" },
         generatedTestFile: { $ref: "#/$defs/normalizedFile" },
         frameworkTestFiles: {
           type: "array",
-          items: { $ref: "#/$defs/normalizedFile" }
+          items: { $ref: "#/$defs/normalizedFile" },
         },
         stdout: { type: "string" },
         stderr: { type: "string" },
-        workspace: { type: "string" }
-      }
+        workspace: { type: "string" },
+      },
     },
     hashes: {
       type: "object",
@@ -299,12 +350,13 @@ export const semanticReportSchema = {
       properties: {
         request: { type: "string" },
         normalizedSource: { type: "string" },
-        testSource: { type: "string" }
-      }
+        testSource: { type: "string" },
+        virtualEnvironmentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+      },
     },
-    qualification: { type: "string", minLength: 1 }
+    qualification: { type: "string", minLength: 1 },
   },
-  $defs: commonReportDefs()
+  $defs: commonReportDefs(),
 } as const;
 
 function commonReportDefs() {
@@ -318,21 +370,27 @@ function commonReportDefs() {
         startLine: { type: "integer", minimum: 1 },
         endLine: { type: "integer", minimum: 1 },
         startColumn: { type: "integer", minimum: 1 },
-        endColumn: { type: "integer", minimum: 1 }
-      }
+        endColumn: { type: "integer", minimum: 1 },
+      },
     },
     diagnostic: diagnosticSchema,
     rewriteRecord: {
       type: "object",
-      required: ["ruleId", "originalText", "generatedText", "sourceSpan", "generatedSpan"],
+      required: [
+        "ruleId",
+        "originalText",
+        "generatedText",
+        "sourceSpan",
+        "generatedSpan",
+      ],
       additionalProperties: false,
       properties: {
         ruleId: { type: "string" },
         originalText: { type: "string" },
         generatedText: { type: "string" },
         sourceSpan: { $ref: "#/$defs/sourceSpan" },
-        generatedSpan: { $ref: "#/$defs/sourceSpan" }
-      }
+        generatedSpan: { $ref: "#/$defs/sourceSpan" },
+      },
     },
     normalizedFile: {
       type: "object",
@@ -340,12 +398,20 @@ function commonReportDefs() {
       additionalProperties: false,
       properties: {
         path: { type: "string" },
-        content: { type: "string" }
-      }
+        content: { type: "string" },
+      },
     },
     semanticArtifactIdentity: {
       type: "object",
-      required: ["artifactId", "role", "path", "sha256", "byteLength", "primary", "visibility"],
+      required: [
+        "artifactId",
+        "role",
+        "path",
+        "sha256",
+        "byteLength",
+        "primary",
+        "visibility",
+      ],
       additionalProperties: false,
       properties: {
         artifactId: { type: "string", pattern: "^artifact:[a-f0-9]{64}$" },
@@ -354,8 +420,8 @@ function commonReportDefs() {
         sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
         byteLength: { type: "integer", minimum: 0 },
         primary: { type: "boolean" },
-        visibility: { enum: ["review", "technical"] }
-      }
+        visibility: { enum: ["review", "technical"] },
+      },
     },
     semanticTestSubject: {
       type: "object",
@@ -365,17 +431,18 @@ function commonReportDefs() {
         candidateSourcePath: { type: "string" },
         candidateSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
         dependencyBundleSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        virtualEnvironmentSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
         discoveredFrameworkTests: {
           type: "array",
           uniqueItems: true,
-          items: { type: "string", minLength: 1 }
+          items: { type: "string", minLength: 1 },
         },
         selectedFrameworkTests: {
           type: "array",
           uniqueItems: true,
-          items: { type: "string", minLength: 1 }
-        }
-      }
+          items: { type: "string", minLength: 1 },
+        },
+      },
     },
     frameworkTargetCoverage: {
       type: "object",
@@ -386,7 +453,7 @@ function commonReportDefs() {
         "testSourceSha256",
         "assertionCount",
         "targetReferenceCount",
-        "verified"
+        "verified",
       ],
       additionalProperties: false,
       properties: {
@@ -396,8 +463,8 @@ function commonReportDefs() {
         testSourceSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
         assertionCount: { type: "integer", minimum: 0 },
         targetReferenceCount: { type: "integer", minimum: 0 },
-        verified: { type: "boolean" }
-      }
+        verified: { type: "boolean" },
+      },
     },
     frameworkAssertionEvidence: {
       type: "object",
@@ -412,7 +479,7 @@ function commonReportDefs() {
         "targetLinked",
         "reached",
         "status",
-        "executionEvidence"
+        "executionEvidence",
       ],
       additionalProperties: false,
       properties: {
@@ -421,7 +488,7 @@ function commonReportDefs() {
         productionTarget: { type: "string", minLength: 1 },
         assertionName: {
           type: "string",
-          pattern: "^[mM]_[xX][aA][sS][sS][eE][rR][tT][A-Za-z0-9_]*$"
+          pattern: "^[mM]_[xX][aA][sS][sS][eE][rR][tT][A-Za-z0-9_]*$",
         },
         sourcePath: { type: "string", minLength: 1 },
         testSourceSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
@@ -434,7 +501,9 @@ function commonReportDefs() {
         reached: { type: "boolean" },
         startedAt: { type: "string", minLength: 1 },
         completedAt: { type: "string", minLength: 1 },
-        status: { enum: ["not_run", "not_reached", "passed", "failed", "unknown"] },
+        status: {
+          enum: ["not_run", "not_reached", "passed", "failed", "unknown"],
+        },
         executionEvidence: {
           enum: [
             "not_executed",
@@ -443,10 +512,10 @@ function commonReportDefs() {
             "parent_test_failed",
             "assertion_checkpoint_passed",
             "assertion_checkpoint_failed",
-            "assertion_checkpoint_not_reached"
-          ]
-        }
-      }
+            "assertion_checkpoint_not_reached",
+          ],
+        },
+      },
     },
     frameworkAssertionLedger: {
       type: "object",
@@ -459,7 +528,7 @@ function commonReportDefs() {
         "passed",
         "failed",
         "notReached",
-        "checkpoints"
+        "checkpoints",
       ],
       additionalProperties: false,
       properties: {
@@ -482,23 +551,31 @@ function commonReportDefs() {
               "checkpointTestName",
               "ordinal",
               "reached",
-              "status"
+              "status",
             ],
             additionalProperties: false,
             properties: {
-              checkpointId: { type: "string", pattern: "^checkpoint:[a-f0-9]{64}$" },
-              assertionId: { type: "string", pattern: "^assertion:[a-f0-9]{64}$" },
+              checkpointId: {
+                type: "string",
+                pattern: "^checkpoint:[a-f0-9]{64}$",
+              },
+              assertionId: {
+                type: "string",
+                pattern: "^assertion:[a-f0-9]{64}$",
+              },
               testFunctionBlock: { type: "string", minLength: 1 },
               checkpointTestName: { type: "string", minLength: 1 },
               ordinal: { type: "integer", minimum: 1 },
               reached: { type: "boolean" },
               startedAt: { type: "string", minLength: 1 },
               completedAt: { type: "string", minLength: 1 },
-              status: { enum: ["not_run", "not_reached", "passed", "failed", "unknown"] }
-            }
-          }
-        }
-      }
+              status: {
+                enum: ["not_run", "not_reached", "passed", "failed", "unknown"],
+              },
+            },
+          },
+        },
+      },
     },
     standardFunctionBlockParameterContract: {
       type: "object",
@@ -510,13 +587,21 @@ function commonReportDefs() {
         aliases: {
           type: "array",
           uniqueItems: true,
-          items: { type: "string", minLength: 1 }
-        }
-      }
+          items: { type: "string", minLength: 1 },
+        },
+      },
     },
     standardFunctionBlockContracts: {
       type: "object",
-      required: ["schemaVersion", "schema", "contractVersion", "library", "sha256", "payloadBytes", "functionBlocks"],
+      required: [
+        "schemaVersion",
+        "schema",
+        "contractVersion",
+        "library",
+        "sha256",
+        "payloadBytes",
+        "functionBlocks",
+      ],
       additionalProperties: false,
       properties: {
         schemaVersion: { const: 1 },
@@ -529,8 +614,8 @@ function commonReportDefs() {
           properties: {
             name: { const: "iec-standard-fb" },
             version: { const: "1.1.0" },
-            namespace: { const: "strucpp" }
-          }
+            namespace: { const: "strucpp" },
+          },
         },
         sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
         payloadBytes: { type: "integer", minimum: 0 },
@@ -544,25 +629,40 @@ function commonReportDefs() {
               name: { type: "string", minLength: 1 },
               inputs: {
                 type: "array",
-                items: { $ref: "#/$defs/standardFunctionBlockParameterContract" }
+                items: {
+                  $ref: "#/$defs/standardFunctionBlockParameterContract",
+                },
               },
               outputs: {
                 type: "array",
-                items: { $ref: "#/$defs/standardFunctionBlockParameterContract" }
+                items: {
+                  $ref: "#/$defs/standardFunctionBlockParameterContract",
+                },
               },
               inouts: {
                 type: "array",
-                items: { $ref: "#/$defs/standardFunctionBlockParameterContract" }
+                items: {
+                  $ref: "#/$defs/standardFunctionBlockParameterContract",
+                },
               },
-              dominance: { enum: ["set", "reset"] }
-            }
-          }
-        }
-      }
+              dominance: { enum: ["set", "reset"] },
+            },
+          },
+        },
+      },
     },
     normalizationSummary: {
       type: "object",
-      required: ["profile", "status", "includedObjects", "omittedObjects", "blockedObjects", "symbolMap", "rewrites", "diagnostics"],
+      required: [
+        "profile",
+        "status",
+        "includedObjects",
+        "omittedObjects",
+        "blockedObjects",
+        "symbolMap",
+        "rewrites",
+        "diagnostics",
+      ],
       additionalProperties: false,
       properties: {
         profile: { const: "tcgen-strucpp-v1" },
@@ -572,17 +672,17 @@ function commonReportDefs() {
         blockedObjects: { type: "array", items: { type: "string" } },
         symbolMap: {
           type: "object",
-          additionalProperties: { type: "string" }
+          additionalProperties: { type: "string" },
         },
         rewrites: {
           type: "array",
-          items: { $ref: "#/$defs/rewriteRecord" }
+          items: { $ref: "#/$defs/rewriteRecord" },
         },
         diagnostics: {
           type: "array",
-          items: { $ref: "#/$defs/diagnostic" }
-        }
-      }
-    }
+          items: { $ref: "#/$defs/diagnostic" },
+        },
+      },
+    },
   } as const;
 }
