@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { FrameworkTestConfig, NormalizeRequest, TcGenTestSpec } from "../src/domain/models.js";
 
@@ -16,6 +17,45 @@ export const exampleNames = [
 ];
 
 export type FixtureRequest = NormalizeRequest & { testSpec?: TcGenTestSpec; frameworkTest?: FrameworkTestConfig };
+
+export function qualifiedCompilerContractFixture(): Record<string, unknown> {
+  const payload = {
+    schema: "tcgen-iec-function-block-contracts-v1",
+    contractVersion: "1.0.0",
+    library: { name: "iec-standard-fb", version: "1.1.0", namespace: "strucpp" },
+    functionBlocks: [
+      {
+        name: "RS",
+        inputs: [
+          { name: "SET", type: "BOOL", aliases: ["S"] },
+          { name: "RESET1", type: "BOOL", aliases: ["R1"] }
+        ],
+        outputs: [{ name: "Q1", type: "BOOL" }],
+        inouts: [],
+        dominance: "reset"
+      },
+      {
+        name: "SR",
+        inputs: [
+          { name: "SET1", type: "BOOL", aliases: ["S1"] },
+          { name: "RESET", type: "BOOL", aliases: ["R"] }
+        ],
+        outputs: [{ name: "Q1", type: "BOOL" }],
+        inouts: [],
+        dominance: "set"
+      }
+    ]
+  };
+  const canonical = JSON.stringify(payload);
+  return {
+    ...payload,
+    identity: {
+      algorithm: "SHA-256",
+      payloadSha256: createHash("sha256").update(canonical, "utf8").digest("hex"),
+      payloadBytes: Buffer.byteLength(canonical, "utf8")
+    }
+  };
+}
 
 export function loadRequest(name: string): FixtureRequest {
   return JSON.parse(readFileSync(join("examples", name, "request.json"), "utf8"));

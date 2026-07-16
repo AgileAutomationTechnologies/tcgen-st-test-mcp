@@ -7,11 +7,12 @@ Autonomy / OpenPLC Project under GPL-3.0-or-later:
 
 https://github.com/Autonomy-Logic/STruCpp
 
-The v0.8 compatibility target is the TcGen STruC++ distribution
-`0.5.13-tcgen.2`, based on upstream STruC++ 0.5.13. The Windows runtime
+The v0.8.1 compatibility target is the TcGen STruC++ distribution
+`0.5.13-tcgen.3`, based on upstream STruC++ 0.5.13. The Windows runtime
 slice is pinned to AgileAutomationTechnologies commit
-`627f22547db4af04f2ea17135d99abd0191ffc3c`, including the required
-Windows/compiler-launch and TwinCAT short-circuit fixes.
+`eca6ff87dc28b804298944ed4ee6e633afad368d`, including the required
+Windows/compiler-launch, TwinCAT short-circuit, and qualified RS/SR named-pin
+compatibility fixes.
 
 The installed `backend/libs` directory contains the runtime library assets
 produced by that exact pinned checkout:
@@ -21,6 +22,7 @@ produced by that exact pinned checkout:
 - `additional-function-blocks.stlib`
 - `oscat-basic.stlib`
 - `iec-types.json`
+- `iec-function-block-contracts.json`
 
 These files are required for zero-configuration compilation of IEC standard
 function blocks such as TON, TP, CTU, and R_TRIG. The pack also carries the

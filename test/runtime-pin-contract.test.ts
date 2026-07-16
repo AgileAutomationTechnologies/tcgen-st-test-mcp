@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { testedStrucppVersion } from "../src/backends/StrucppBackend.js";
 
-const lockedStrucppCommit = "627f22547db4af04f2ea17135d99abd0191ffc3c";
+const lockedStrucppCommit = "eca6ff87dc28b804298944ed4ee6e633afad368d";
 
 describe("native CI runtime pin", () => {
   it("builds and verifies the exact qualified downstream STruC++ runtime", () => {

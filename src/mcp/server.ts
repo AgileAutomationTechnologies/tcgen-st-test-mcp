@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 import { packageVersion } from "../version.js";
 import { toolDefinitions, toolHandlers } from "./tools.js";
+import type { ToolProgress } from "./tools.js";
 
 type JsonRpcRequest = {
   jsonrpc?: string;
@@ -9,21 +10,42 @@ type JsonRpcRequest = {
   params?: Record<string, unknown>;
 };
 
+type JsonRpcNotificationSink = (notification: Record<string, unknown>) => void;
+const activeToolRequests = new Map<string, AbortController>();
+
 export async function startStdioServer(): Promise<void> {
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const inFlight = new Set<Promise<void>>();
   for await (const line of rl) {
     if (!line.trim()) continue;
-    try {
-      const request = JSON.parse(line) as JsonRpcRequest;
-      const response = await handleRequest(request);
-      if (response) process.stdout.write(JSON.stringify(response) + "\n");
-    } catch (error) {
-      process.stdout.write(JSON.stringify(errorResponse(null, -32700, error instanceof Error ? error.message : String(error))) + "\n");
-    }
+    const work = processStdioLine(line).finally(() => inFlight.delete(work));
+    inFlight.add(work);
+  }
+  await Promise.allSettled([...inFlight]);
+}
+
+async function processStdioLine(line: string): Promise<void> {
+  try {
+    const request = JSON.parse(line) as JsonRpcRequest;
+    const response = await handleRequest(request, writeStdioMessage);
+    if (response) writeStdioMessage(response);
+  } catch (error) {
+    writeStdioMessage(errorResponse(
+      null,
+      -32700,
+      error instanceof Error ? error.message : String(error)
+    ));
   }
 }
 
-async function handleRequest(request: JsonRpcRequest): Promise<Record<string, unknown> | undefined> {
+function writeStdioMessage(message: Record<string, unknown>): void {
+  process.stdout.write(JSON.stringify(message) + "\n");
+}
+
+export async function handleRequest(
+  request: JsonRpcRequest,
+  notify?: JsonRpcNotificationSink
+): Promise<Record<string, unknown> | undefined> {
   const id = request.id ?? null;
   switch (request.method) {
     case "initialize":
@@ -38,6 +60,13 @@ async function handleRequest(request: JsonRpcRequest): Promise<Record<string, un
       };
     case "notifications/initialized":
       return undefined;
+    case "notifications/cancelled": {
+      const requestId = request.params?.requestId;
+      if (typeof requestId === "string" || typeof requestId === "number") {
+        activeToolRequests.get(requestKey(requestId))?.abort();
+      }
+      return undefined;
+    }
     case "tools/list":
       return { jsonrpc: "2.0", id, result: { tools: toolDefinitions } };
     case "tools/call": {
@@ -46,7 +75,24 @@ async function handleRequest(request: JsonRpcRequest): Promise<Record<string, un
       const args = (params.arguments as Record<string, unknown>) ?? {};
       const handler = toolHandlers[name];
       if (!handler) return errorResponse(id, -32602, `Unknown tool '${name}'.`);
-      const structuredContent = await handler(args);
+      const progressToken = progressTokenFrom(params._meta);
+      const controller = new AbortController();
+      const key = requestKey(id);
+      if (activeToolRequests.has(key)) {
+        return errorResponse(id, -32600, `A tool request with id '${String(id)}' is already active.`);
+      }
+      activeToolRequests.set(key, controller);
+      let structuredContent: unknown;
+      try {
+        structuredContent = await handler(args, {
+          signal: controller.signal,
+          ...(progressToken === undefined
+            ? {}
+            : { reportProgress: progressReporter(progressToken, notify) })
+        });
+      } finally {
+        activeToolRequests.delete(key);
+      }
       return {
         jsonrpc: "2.0",
         id,
@@ -60,6 +106,42 @@ async function handleRequest(request: JsonRpcRequest): Promise<Record<string, un
     default:
       return errorResponse(id, -32601, `Unsupported method '${request.method}'.`);
   }
+}
+
+function progressReporter(
+  progressToken: string | number,
+  notify: JsonRpcNotificationSink | undefined
+): (update: ToolProgress) => void {
+  return (update: ToolProgress) => {
+    try {
+      notify?.({
+        jsonrpc: "2.0",
+        method: "notifications/progress",
+        params: {
+          progressToken,
+          progress: update.progress,
+          total: update.total,
+          message: update.message,
+          ...(update.tcgen ? { tcgen: update.tcgen } : {})
+        }
+      });
+    } catch {
+      // Progress is advisory. A disconnected observer must not alter the
+      // authoritative semantic result.
+    }
+  };
+}
+
+function requestKey(id: string | number | null): string {
+  return `${typeof id}:${String(id)}`;
+}
+
+function progressTokenFrom(value: unknown): string | number | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const token = (value as { progressToken?: unknown }).progressToken;
+  return typeof token === "string" || typeof token === "number"
+    ? token
+    : undefined;
 }
 
 function hasBlockingDiagnostics(value: unknown): boolean {

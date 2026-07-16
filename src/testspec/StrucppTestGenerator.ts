@@ -8,6 +8,8 @@ export interface GeneratedTestFile {
   diagnostics: Diagnostic[];
   hash: string;
   generatedTestNames: string[];
+  /** Private backend result identities; omitted when identical to generatedTestNames. */
+  executionTestNames?: string[];
   coveredExecutableObjects: string[];
 }
 

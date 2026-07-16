@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -7,7 +7,13 @@ import { describe, expect, it, vi } from "vitest";
 import { StrucppBackend } from "../src/backends/StrucppBackend.js";
 import { SemanticTestReport } from "../src/domain/models.js";
 import { toolHandlers } from "../src/mcp/tools.js";
-import { loadRequest, loadTestFixture, localStrucppRepo, withEnv } from "./helpers.js";
+import {
+  loadRequest,
+  loadTestFixture,
+  localStrucppRepo,
+  qualifiedCompilerContractFixture,
+  withEnv
+} from "./helpers.js";
 
 describe("failure paths", () => {
   it("returns backend_error when STruC++ is missing", async () => {
@@ -25,7 +31,7 @@ describe("failure paths", () => {
       executionAttempted: false,
       executable: "strucpp-win.exe",
       cliMode: "native",
-      version: "0.5.13-tcgen.2",
+      version: "0.5.13-tcgen.3",
       stdout: "",
       stderr: "",
       exitCode: null,
@@ -96,11 +102,16 @@ describe("failure paths", () => {
     if (!existsSync(gppExecutable)) return;
     const tempDir = await mkdtemp(join(tmpdir(), "tcgen-no-tests-"));
     const fakeCli = join(tempDir, "fake-strucpp.mjs");
+    await writeCompilerContract(tempDir);
     await writeFile(
       fakeCli,
       [
         "if (process.argv.includes('--version')) {",
-        "  console.log('STruC++ version 0.5.13-tcgen.2');",
+        "  console.log('STruC++ version 0.5.13-tcgen.3');",
+        "  process.exit(0);",
+        "}",
+        "if (process.argv.some(value => value.endsWith('runtime_self_test.st'))) {",
+        "  console.log('PASS: tcgen-runtime-self-test');",
         "  process.exit(0);",
         "}",
         "console.log('Compilation completed without executing tests.');",
@@ -134,11 +145,16 @@ describe("failure paths", () => {
     if (!existsSync(gppExecutable)) return;
     const tempDir = await mkdtemp(join(tmpdir(), "tcgen-fake-strucpp-"));
     const fakeCli = join(tempDir, "fake-strucpp.mjs");
+    await writeCompilerContract(tempDir);
     await writeFile(
       fakeCli,
       [
         "if (process.argv.includes('--version')) {",
-        "  console.log('STruC++ version 0.5.13-tcgen.2');",
+        "  console.log('STruC++ version 0.5.13-tcgen.3');",
+        "  process.exit(0);",
+        "}",
+        "if (process.argv.some(value => value.endsWith('runtime_self_test.st'))) {",
+        "  console.log('PASS: tcgen-runtime-self-test');",
         "  process.exit(0);",
         "}",
         "setInterval(() => {}, 1000);"
@@ -232,4 +248,14 @@ async function rmRetry(path: string): Promise<void> {
       await new Promise(resolve => setTimeout(resolve, 250));
     }
   }
+}
+
+async function writeCompilerContract(root: string): Promise<void> {
+  const directory = join(root, "libs");
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, "iec-function-block-contracts.json"),
+    JSON.stringify(qualifiedCompilerContractFixture()),
+    "utf8"
+  );
 }

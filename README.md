@@ -148,7 +148,9 @@ Semantic report v2 publishes the verified identities and structural evidence in
 `frameworkTargetCoverage[]` (`assertionCount`, `targetReferenceCount`, and
 `verified`). Generate and run tool metadata advertise the
 `frameworkTargetCoverageV1`, `frameworkMultiScanV1`,
-`twinCatShortCircuitOperatorsV1`, and (on `tcgen_st_test_run`)
+`twinCatShortCircuitOperatorsV1`, `twinCatBistableAliasesV1`,
+`frameworkAssertionLedgerV1`, `frameworkAssertionProgressV1`, and (on
+`tcgen_st_test_run`)
 `candidateCompilePreflightV1` capabilities. The candidate-preflight capability
 means the trusted scheduler can compile the exact candidate and dependency
 bundle with a deterministic internal smoke specification before spending a
@@ -167,12 +169,19 @@ state and must not advance the test as a side effect.
 
 The additive `assertions[]` field identifies every meaningful submitted
 `m_xAssert*` call by source path, source SHA-256, one-based line, mapped target,
-and stable `assertionId`. Generation reports use `status: "not_run"`. An exact
-passing wrapper qualifies its rows as passed with `parent_test_passed` evidence
-(it does not claim separate per-call instrumentation); a failing wrapper leaves
-rows `unknown` unless its backend message uniquely identifies one submitted
-assertion description. This conservative evidence is part of report v2 and the existing
-`frameworkTargetCoverageV1` capability; report v1 remains unchanged.
+stable `assertionId`, and stable checkpoint identity. Generation reports use
+`status: "not_run"`. The private offline adapter records every dynamic assertion
+invocation in a bounded ledger and emits one independent checkpoint per source
+assertion. A single STruC++ invocation therefore returns complete `passed`,
+`failed`, or `not_reached` evidence without changing the submitted Framework ST.
+The parent wrapper and every checkpoint execute a fresh test-FB/CUT instance;
+checkpoint tests never query assertion state left behind by another TEST.
+The adapter binds runtime rows to stable assertion IDs rather than treating the
+human-readable assertion message as identity. Reached rows include start and
+completion timestamps, and unreached rows are explicit rather than inferred as
+passing.
+`assertionLedger` reports the stable ledger hash, completeness, and counts while
+the legacy first-error result remains available. Report v1 remains unchanged.
 
 In framework mode the MCP normalizes the CUT and agent-authored test FBs and
 replaces uploaded framework infrastructure such as `FB_TestRunner`,
@@ -182,9 +191,26 @@ STruC++-compatible shim. A PROGRAM containing both `FB_TestRunner` and
 rewritten to a compiled offline registration surrogate; ordinary production
 `PROGRAM MAIN` objects remain unchanged. Generated wrapper `TEST` blocks then
 execute every concrete `FB_Test_*` instance. A failing assertion is returned as
-`verdict: "failed"` with the STruC++ detail in `tests[].message`.
+`verdict: "failed"` with a human-readable aggregate in `tests[].message` and the
+exact per-assertion cause in `assertions[]` and `assertionLedger`.
 Semantic report v2 also exposes `backend.executionAttempted`, distinguishing a
 normalization/preflight rejection from an invocation that reached STruC++.
+`backend.standardFunctionBlockContracts` is loaded from the compiler-generated
+`libs/iec-function-block-contracts.json` sidecar. Preflight validates the
+sidecar schema, library/contract versions, its canonical payload byte count and
+SHA-256, every machine-readable pin signature and alias collision, and the RS/SR
+TwinCAT pin order and dominance semantics. The installed runtime manifest must
+contain and hash this sidecar; a missing, altered, or incompatible contract
+fails closed. A compiler rejection of an admitted
+TwinCAT pin is reported as `backend_incompatibility`, never as a candidate bug.
+
+The stdio server runs independent tool requests concurrently so Virtual Tests
+for parallel workers are not serialized by the MCP transport. Callers that send
+an MCP progress token receive request-bound phase notifications. MCP cancellation
+notifications abort the matching active semantic child process; progress tokens,
+grants, and authorization data are never forwarded to backend children.
+Assertion completion notifications are emitted as backend result lines arrive;
+the authoritative report remains the final complete ledger.
 
 ## Local Development
 
@@ -224,12 +250,12 @@ requires a real external Node executable through `TCGEN_ST_NODE_PATH` or PATH;
 the packaged MCP refuses to recursively use itself as Node. Prefer native
 `strucpp-win.exe` in product installations, which needs no external Node.
 
-The v0.8 Windows validation target is the AgileAutomationTechnologies STruC++
-downstream release at commit `627f22547db4af04f2ea17135d99abd0191ffc3c`,
+The v0.8.1 Windows validation target is the AgileAutomationTechnologies STruC++
+downstream release at commit `eca6ff87dc28b804298944ed4ee6e633afad368d`,
 based on upstream STruC++ `0.5.13` plus the qualified TcGen downstream patch set,
-identified as `0.5.13-tcgen.2`.
+identified as `0.5.13-tcgen.3`.
 Backend checks and semantic runs fail closed when the detected STruC++ version
-is missing or differs from the complete `0.5.13-tcgen.2` distribution version.
+is missing or differs from the complete `0.5.13-tcgen.3` distribution version.
 
 ## Verification
 

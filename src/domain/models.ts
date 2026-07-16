@@ -44,6 +44,14 @@ export interface Diagnostic {
   object?: string;
   ruleId?: string;
   suggestion?: string;
+  detail?: "backend_incompatibility";
+  technicalEvidence?: {
+    kind: "compiler_output";
+    channel: "stdout" | "stderr";
+    content: string;
+    sourceKind: "generated_cpp";
+    generatedArtifacts: string[];
+  };
 }
 
 export interface SourceFile {
@@ -167,12 +175,73 @@ export interface FrameworkAssertionEvidence {
   sourceLine: number;
   description?: string;
   targetLinked: boolean;
-  status: "not_run" | "passed" | "failed" | "unknown";
+  checkpointId?: string;
+  checkpointTestName?: string;
+  checkpointOrdinal?: number;
+  reached: boolean;
+  startedAt?: string;
+  completedAt?: string;
+  status: "not_run" | "not_reached" | "passed" | "failed" | "unknown";
   executionEvidence:
     | "not_executed"
     | "parent_test_passed"
     | "backend_message"
-    | "parent_test_failed";
+    | "parent_test_failed"
+    | "assertion_checkpoint_passed"
+    | "assertion_checkpoint_failed"
+    | "assertion_checkpoint_not_reached";
+}
+
+export interface FrameworkAssertionCheckpoint {
+  checkpointId: string;
+  assertionId: string;
+  testFunctionBlock: string;
+  checkpointTestName: string;
+  ordinal: number;
+  reached: boolean;
+  startedAt?: string;
+  completedAt?: string;
+  status: FrameworkAssertionEvidence["status"];
+}
+
+export interface FrameworkAssertionLedger {
+  contract: "tcgen-framework-assertion-ledger-v1";
+  ledgerSha256: string;
+  complete: boolean;
+  expected: number;
+  reached: number;
+  passed: number;
+  failed: number;
+  notReached: number;
+  checkpoints: FrameworkAssertionCheckpoint[];
+}
+
+export interface StandardFunctionBlockParameterContract {
+  name: string;
+  type: string;
+  aliases: string[];
+}
+
+export interface StandardFunctionBlockContract {
+  name: string;
+  inputs: StandardFunctionBlockParameterContract[];
+  outputs: StandardFunctionBlockParameterContract[];
+  inouts: StandardFunctionBlockParameterContract[];
+  dominance?: "set" | "reset";
+}
+
+export interface StandardFunctionBlockContracts {
+  schemaVersion: 1;
+  schema: "tcgen-iec-function-block-contracts-v1";
+  contractVersion: "1.0.0";
+  library: {
+    name: "iec-standard-fb";
+    version: "1.1.0";
+    namespace: "strucpp";
+  };
+  sha256: string;
+  payloadBytes: number;
+  functionBlocks: StandardFunctionBlockContract[];
 }
 
 export type TestStep =
@@ -197,6 +266,8 @@ export interface BackendCheckResult {
   testedVersion: string;
   gppAvailable?: boolean;
   gppExecutable?: string;
+  standardFunctionBlockContracts: StandardFunctionBlockContracts;
+  standardFunctionBlockContractQualified: boolean;
   diagnostics: Diagnostic[];
 }
 
@@ -207,6 +278,7 @@ export interface SemanticTestReport {
   coveredExecutableObjects: string[];
   frameworkTargetCoverage: FrameworkTargetCoverage[];
   assertions: FrameworkAssertionEvidence[];
+  assertionLedger: FrameworkAssertionLedger;
   generatedTestNames: string[];
   subject: SemanticTestSubject & {
     candidateSha256: string;
@@ -220,6 +292,8 @@ export interface SemanticTestReport {
     executable?: string;
     cliMode?: "native" | "node";
     gppExecutable?: string;
+    standardFunctionBlockContracts: StandardFunctionBlockContracts;
+    standardFunctionBlockContractQualified: boolean;
   };
   normalization: NormalizationSummary;
   summary: {

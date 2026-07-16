@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { BackendRunResult, StrucppBackend } from "../backends/StrucppBackend.js";
+import { copyStandardFunctionBlockContracts } from "../backends/StandardFunctionBlockContracts.js";
 import { NormalizeRequest, SemanticTestReport, SemanticTestSubject, diagnostic } from "../domain/models.js";
 import {
   sanitizeCompilerDiagnostics,
@@ -9,13 +10,49 @@ import {
 } from "../domain/reportSanitizer.js";
 import { TcGenToStrucppNormalizer } from "../normalizer/TcGenToStrucppNormalizer.js";
 import { normalizerOptionsForTestRequest, resolveTestFile, TestRequest } from "../testspec/TestFileResolver.js";
-import { applyFrameworkAssertionExecution } from "../testspec/FrameworkAssertionEvidence.js";
+import {
+  applyFrameworkAssertionExecution,
+  buildFrameworkAssertionLedger
+} from "../testspec/FrameworkAssertionEvidence.js";
 import { resolveCandidateCompilePreflight } from "../testspec/CandidateCompilePreflight.js";
 import { WorkspaceManager } from "../workspace/WorkspaceManager.js";
 import { validateNormalizationReport, validateSemanticReport } from "../schemas/validators.js";
 import { packageVersion } from "../version.js";
 
-type ToolHandler = (args: Record<string, unknown>) => Promise<unknown>;
+export type ToolProgress = {
+  progress: number;
+  total: number;
+  message: string;
+  tcgen?: {
+    contract: "tcgen-framework-assertion-progress-v1";
+    kind: "assertion_checkpoint";
+    phase: "queued" | "completed";
+    checkpointId: string;
+    assertionId: string;
+    testFunctionBlock: string;
+    checkpointTestName: string;
+    ordinal: number;
+    sourceLine: number;
+    reached: boolean;
+    startedAt?: string;
+    completedAt?: string;
+    status: SemanticTestReport["assertions"][number]["status"];
+  };
+};
+
+export type ToolHandlerContext = {
+  reportProgress?: (update: ToolProgress) => void;
+  signal?: AbortSignal;
+};
+
+type ToolHandler = (
+  args: Record<string, unknown>,
+  context?: ToolHandlerContext
+) => Promise<unknown>;
+
+function progress(context: ToolHandlerContext | undefined, value: ToolProgress): void {
+  context?.reportProgress?.(value);
+}
 
 export const toolDefinitions = [
   tool("tcgen_st_backend_check", "Check STruC++ backend availability and version.", {
@@ -28,11 +65,15 @@ export const toolDefinitions = [
 ];
 
 export const toolHandlers: Record<string, ToolHandler> = {
-  async tcgen_st_backend_check() {
-    return new StrucppBackend().check();
+  async tcgen_st_backend_check(_args, context) {
+    progress(context, { progress: 0, total: 1, message: "Checking the qualified semantic backend." });
+    const result = await new StrucppBackend().check();
+    progress(context, { progress: 1, total: 1, message: "Semantic backend check completed." });
+    return result;
   },
 
-  async tcgen_st_normalize(args) {
+  async tcgen_st_normalize(args, context) {
+    progress(context, { progress: 0, total: 1, message: "Normalizing the exact candidate scope." });
     const request = args as unknown as NormalizeRequest;
     const result = new TcGenToStrucppNormalizer().normalize(request);
     const response = {
@@ -45,24 +86,30 @@ export const toolHandlers: Record<string, ToolHandler> = {
       diagnostics: result.normalization.diagnostics,
       hashes: result.hashes
     };
-    return withReportValidation(response, validateNormalizationReport);
+    const validated = withReportValidation(response, validateNormalizationReport);
+    progress(context, { progress: 1, total: 1, message: "Candidate normalization completed." });
+    return validated;
   },
 
-  async tcgen_st_test_generate(args) {
+  async tcgen_st_test_generate(args, context) {
+    progress(context, { progress: 0, total: 2, message: "Normalizing the exact candidate and Framework ST." });
     const request = args as unknown as TestRequest;
     const normalized = new TcGenToStrucppNormalizer().normalize(request, normalizerOptionsForTestRequest(request));
     const generated = resolveTestFile(request, normalized);
+    emitCheckpointProgress(context, generated.assertions ?? [], "queued", 1, 2);
     const normalizedForReport = withRuntimeSourceFiles(normalized, generated.sourceFiles);
     const hashes: SemanticTestReport["hashes"] = {
       ...normalizedForReport.hashes,
       testSource: generated.hash || sha256(generated.content)
     };
-    return {
+    progress(context, { progress: 1, total: 2, message: "Generating the private semantic execution adapter." });
+    const response = {
       schemaVersion: 2,
       testMode: generated.mode,
       coveredExecutableObjects: [...generated.coveredExecutableObjects],
       frameworkTargetCoverage: [...(generated.frameworkTargetCoverage ?? [])],
       assertions: [...(generated.assertions ?? [])],
+      assertionLedger: buildFrameworkAssertionLedger(generated.assertions ?? [], false),
       generatedTestNames: [...generated.generatedTestNames],
       ...(generated.executionContract ? { executionContract: generated.executionContract } : {}),
       subject: subjectForTest(normalizedForReport.subject, generated),
@@ -76,9 +123,12 @@ export const toolHandlers: Record<string, ToolHandler> = {
       diagnostics: [...normalizedForReport.normalization.diagnostics, ...generated.diagnostics],
       hashes
     };
+    progress(context, { progress: 2, total: 2, message: "Framework ST and assertion checkpoints are ready." });
+    return response;
   },
 
-  async tcgen_st_test_run(args) {
+  async tcgen_st_test_run(args, context) {
+    progress(context, { progress: 0, total: 5, message: "Normalizing the exact candidate and Framework ST." });
     const request = args as unknown as TestRequest & {
       options?: NormalizeRequest["options"] & { timeoutMs?: number; keepWorkspace?: boolean; includeArtifacts?: boolean };
     };
@@ -88,6 +138,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
     });
     const testFile = resolveCandidateCompilePreflight(request, normalized)
       ?? resolveTestFile(request, normalized);
+    progress(context, { progress: 1, total: 5, message: "Generated the private semantic execution adapter and assertion checkpoints." });
+    emitCheckpointProgress(context, testFile.assertions ?? [], "queued", 1, 5);
     const normalizedForRun = withRuntimeSourceFiles(normalized, testFile.sourceFiles);
     const keepWorkspace = request.options?.keepWorkspace === true && process.env.TCGEN_ST_ALLOW_KEEP_WORKSPACE === "true";
     const keepWorkspaceDiagnostics =
@@ -100,7 +152,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
         : [];
     const preflightDiagnostics = [...normalizedForRun.normalization.diagnostics, ...testFile.diagnostics, ...keepWorkspaceDiagnostics];
     if (preflightDiagnostics.some(item => item.blocking)) {
-      return buildReport({
+      const report = buildReport({
         verdict: normalizedForRun.normalization.status === "blocked" ? "unsupported" : "backend_error",
         normalized: normalizedForRun,
         testFile,
@@ -108,17 +160,42 @@ export const toolHandlers: Record<string, ToolHandler> = {
         includeArtifacts: request.options?.includeArtifacts === true,
         executionPurpose: candidateCompilePreflightPurpose(request)
       });
+      emitCheckpointProgress(context, report.assertions, "completed", 5, 5);
+      progress(context, { progress: 5, total: 5, message: "Semantic execution was blocked during preparation." });
+      return report;
     }
 
     const workspaceManager = new WorkspaceManager();
     const workspace = await workspaceManager.create();
     let backendResult: BackendRunResult | undefined;
+    const liveCheckpointStatuses = new Map<string, string>();
+    const assertionByCheckpointTest = new Map(
+      (testFile.assertions ?? [])
+        .filter(assertion => Boolean(assertion.checkpointTestName))
+        .map(assertion => [assertion.checkpointTestName!, assertion] as const)
+    );
     let workspaceError: unknown;
     let cleanupDiagnostics: SemanticTestReport["diagnostics"] = [];
     try {
+      progress(context, { progress: 2, total: 5, message: "Preparing the isolated semantic workspace." });
       const sourcePaths = await workspaceManager.writeFiles(workspace, normalizedForRun.normalizedFiles);
       const [testPath] = await workspaceManager.writeFiles(workspace, [{ path: testFile.path, content: testFile.content }]);
-      backendResult = await new StrucppBackend().run(sourcePaths, testPath, { timeoutMs: request.options?.timeoutMs });
+      progress(context, { progress: 3, total: 5, message: "Running the complete semantic suite in one backend invocation." });
+      backendResult = await new StrucppBackend().run(sourcePaths, testPath, {
+        timeoutMs: request.options?.timeoutMs,
+        signal: context?.signal,
+        onTestResult: test => {
+          const assertion = assertionByCheckpointTest.get(test.name);
+          if (!assertion) return;
+          const [bound] = applyFrameworkAssertionExecution(
+            [assertion],
+            [test],
+            workspace
+          );
+          liveCheckpointStatuses.set(bound.assertionId, bound.status);
+          emitCheckpointProgress(context, [bound], "completed", 4, 5);
+        }
+      });
     } catch (error) {
       workspaceError = error;
     } finally {
@@ -136,7 +213,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
     }
 
     if (workspaceError || !backendResult) {
-      return buildReport({
+      const report = buildReport({
         verdict: "backend_error",
         normalized: normalizedForRun,
         testFile,
@@ -154,9 +231,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
         workspace: keepWorkspace ? workspace : undefined,
         executionPurpose: candidateCompilePreflightPurpose(request)
       });
+      emitCheckpointProgress(context, report.assertions, "completed", 5, 5);
+      progress(context, { progress: 5, total: 5, message: "Semantic execution ended with a workspace or backend error." });
+      return report;
     }
 
-    return buildReport({
+    progress(context, { progress: 4, total: 5, message: "Binding backend results to every Framework assertion checkpoint." });
+    const report = buildReport({
       verdict: backendResult.status,
       normalized: normalizedForRun,
       testFile,
@@ -167,8 +248,64 @@ export const toolHandlers: Record<string, ToolHandler> = {
       workspace: keepWorkspace ? workspace : undefined,
       executionPurpose: candidateCompilePreflightPurpose(request)
     });
+    emitCheckpointProgress(
+      context,
+      report.assertions.filter(
+        assertion => liveCheckpointStatuses.get(assertion.assertionId) !== assertion.status
+      ),
+      "completed",
+      5,
+      5
+    );
+    progress(context, { progress: 5, total: 5, message: "Semantic suite and assertion ledger completed." });
+    return report;
   }
 };
+
+function emitCheckpointProgress(
+  context: ToolHandlerContext | undefined,
+  assertions: readonly SemanticTestReport["assertions"][number][],
+  phase: "queued" | "completed",
+  progressValue: number,
+  total: number
+): void {
+  for (const assertion of assertions) {
+    if (
+      !assertion.checkpointId
+      || !assertion.checkpointTestName
+      || !assertion.checkpointOrdinal
+    ) {
+      continue;
+    }
+    const status = phase === "queued" ? "not_run" : assertion.status;
+    progress(context, {
+      progress: progressValue,
+      total,
+      message:
+        `Framework assertion checkpoint ${assertion.checkpointOrdinal} for `
+        + `${assertion.testFunctionBlock} ${phase}${phase === "completed" ? ` (${status})` : ""}.`,
+      tcgen: {
+        contract: "tcgen-framework-assertion-progress-v1",
+        kind: "assertion_checkpoint",
+        phase,
+        checkpointId: assertion.checkpointId,
+        assertionId: assertion.assertionId,
+        testFunctionBlock: assertion.testFunctionBlock,
+        checkpointTestName: assertion.checkpointTestName,
+        ordinal: assertion.checkpointOrdinal,
+        sourceLine: assertion.sourceLine,
+        reached: phase === "queued" ? false : assertion.reached,
+        ...(phase === "completed" && assertion.startedAt
+          ? { startedAt: assertion.startedAt }
+          : {}),
+        ...(phase === "completed" && assertion.completedAt
+          ? { completedAt: assertion.completedAt }
+          : {}),
+        status
+      }
+    });
+  }
+}
 
 export async function runCli(argv: string[]): Promise<number> {
   const command = argv[2] ?? "";
@@ -202,6 +339,7 @@ function buildReport(input: {
     hash: string;
     mode: "generated" | "framework";
     generatedTestNames: string[];
+    executionTestNames?: string[];
     coveredExecutableObjects: string[];
     frameworkTargetCoverage?: SemanticTestReport["frameworkTargetCoverage"];
     assertions?: SemanticTestReport["assertions"];
@@ -216,24 +354,25 @@ function buildReport(input: {
   workspace?: string;
   executionPurpose?: SemanticTestReport["executionPurpose"];
 }): SemanticTestReport {
-  const tests = (input.backendResult?.tests ?? []).map(test => ({
+  const executionTests = (input.backendResult?.tests ?? []).map(test => ({
     ...test,
     name: sanitizeCompilerOutput(test.name, input.sanitizationWorkspace),
     ...(test.message === undefined ? {} : { message: sanitizeCompilerOutput(test.message, input.sanitizationWorkspace) })
   }));
   const assertions = applyFrameworkAssertionExecution(
     input.testFile.assertions ?? [],
-    tests,
+    executionTests,
     input.sanitizationWorkspace
   );
-  const executedTests = tests.filter(test => test.status === "passed" || test.status === "failed").length;
+  const tests = logicalReportTests(input.testFile.mode, executionTests, assertions);
+  const executedTests = executionTests.filter(test => test.status === "passed" || test.status === "failed").length;
   // Both the legacy generated DSL and Framework ST emit a deterministic
   // executable test-name set. A backend result is trustworthy only when every
   // advertised wrapper ran exactly once; framework target/source coverage does
   // not make a partial execution acceptable.
   const generatedResultMismatch = generatedTestResultMismatch(
-    input.testFile.generatedTestNames,
-    tests
+    input.testFile.executionTestNames ?? input.testFile.generatedTestNames,
+    executionTests
   );
   const completedBackendResultIsIncomplete =
     (input.verdict === "passed" || input.verdict === "failed")
@@ -242,7 +381,12 @@ function buildReport(input: {
   const verdict = input.normalized.normalization.status === "partial" && backendVerdict === "passed" ? "partial" : backendVerdict;
   const backend: SemanticTestReport["backend"] = {
     name: "strucpp",
-    executionAttempted: input.backendResult?.executionAttempted === true
+    executionAttempted: input.backendResult?.executionAttempted === true,
+    standardFunctionBlockContracts:
+      input.backendResult?.standardFunctionBlockContracts
+      ?? copyStandardFunctionBlockContracts(),
+    standardFunctionBlockContractQualified:
+      input.backendResult?.standardFunctionBlockContractQualified === true
   };
   if (input.backendResult?.executable) backend.executable = input.backendResult.executable;
   if (backend.executionAttempted && input.backendResult?.version) backend.version = input.backendResult.version;
@@ -280,14 +424,14 @@ function buildReport(input: {
   if (input.backendResult) {
     sanitizedDiagnostics.push(
       ...structuredCompilerOutputDiagnostics(
-        verdict,
+        input.verdict,
         input.backendResult,
         input.sanitizationWorkspace,
         input.normalized.sourceMap
       )
     );
   }
-  const incompleteFrameworkExecution = frameworkExecutionIncomplete(input.testFile.mode, tests, input.backendResult);
+  const incompleteFrameworkExecution = frameworkExecutionIncomplete(input.testFile.mode, executionTests, input.backendResult);
   if (incompleteFrameworkExecution && !sanitizedDiagnostics.some(item => item.code === "TCFRAMEWORK_EXECUTE_INCOMPLETE")) {
     sanitizedDiagnostics.push(
       diagnostic(
@@ -309,6 +453,16 @@ function buildReport(input: {
     coveredExecutableObjects: [...input.testFile.coveredExecutableObjects],
     frameworkTargetCoverage: [...(input.testFile.frameworkTargetCoverage ?? [])],
     assertions,
+    assertionLedger: buildFrameworkAssertionLedger(
+      assertions,
+      assertionLedgerComplete(
+        input.testFile.mode,
+        assertions,
+        executionTests,
+        input.backendResult,
+        generatedResultMismatch
+      )
+    ),
     generatedTestNames: [...input.testFile.generatedTestNames],
     subject: subjectForTest(input.normalized.subject, input.testFile),
     verdict,
@@ -406,6 +560,72 @@ function frameworkExecutionIncomplete(
   return /\btcframework_execute_complete\b/i.test(output);
 }
 
+function assertionLedgerComplete(
+  mode: "generated" | "framework",
+  assertions: readonly SemanticTestReport["assertions"][number][],
+  tests: readonly SemanticTestReport["tests"][number][],
+  backendResult: BackendRunResult | undefined,
+  generatedResultMismatch: string | undefined
+): boolean {
+  if (backendResult?.executionAttempted !== true || generatedResultMismatch) return false;
+  if (mode !== "framework") return true;
+
+  const terminalAssertionStatuses = new Set(["passed", "failed", "not_reached"]);
+  if (!assertions.every(assertion => terminalAssertionStatuses.has(assertion.status))) {
+    return false;
+  }
+  const captureTests = new Set(
+    assertions.map(assertion => `framework ${assertion.testFunctionBlock}`)
+  );
+  return [...captureTests].every(name =>
+    tests.some(test => test.name === name && test.status === "passed")
+  );
+}
+
+function logicalReportTests(
+  mode: "generated" | "framework",
+  executionTests: readonly SemanticTestReport["tests"][number][],
+  assertions: readonly SemanticTestReport["assertions"][number][]
+): SemanticTestReport["tests"] {
+  if (mode !== "framework") return executionTests.map(test => ({ ...test }));
+
+  const assertionBlocks = new Set(assertions.map(assertion => assertion.testFunctionBlock));
+  return executionTests
+    .filter(test => !test.name.startsWith("framework checkpoint "))
+    .map(test => {
+      const block = test.name.startsWith("framework ")
+        ? test.name.slice("framework ".length)
+        : undefined;
+      if (!block || !assertionBlocks.has(block) || test.status !== "passed") {
+        return { ...test };
+      }
+      const failed = assertions.filter(assertion =>
+        assertion.testFunctionBlock === block && assertion.status === "failed"
+      );
+      const notReached = assertions.filter(assertion =>
+        assertion.testFunctionBlock === block && assertion.status === "not_reached"
+      );
+      if (failed.length === 0 && notReached.length === 0) return { ...test };
+
+      const failureDescriptions = failed
+        .map(assertion => assertion.description ?? assertion.assertionId)
+        .join("; ");
+      const messages = [
+        failed.length > 0
+          ? `${failed.length} assertion(s) failed${failureDescriptions ? `: ${failureDescriptions}` : ""}.`
+          : "",
+        notReached.length > 0
+          ? `${notReached.length} assertion checkpoint(s) were not reached.`
+          : ""
+      ].filter(Boolean);
+      return {
+        ...test,
+        status: "failed" as const,
+        message: messages.join(" ")
+      };
+    });
+}
+
 function nameCounts(values: readonly string[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
@@ -454,6 +674,9 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
                 "frameworkTargetCoverageV1",
                 "frameworkMultiScanV1",
                 "twinCatShortCircuitOperatorsV1",
+                "twinCatBistableAliasesV1",
+                "frameworkAssertionLedgerV1",
+                "frameworkAssertionProgressV1",
                 ...(name === "tcgen_st_test_run"
                   ? ["candidateCompilePreflightV1"]
                   : [])
@@ -476,8 +699,11 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
           "structuredContent.coveredExecutableObjects",
           "structuredContent.frameworkTargetCoverage",
           "structuredContent.assertions",
+          "structuredContent.assertionLedger",
           "structuredContent.generatedTestNames",
           "structuredContent.backend.executionAttempted",
+          "structuredContent.backend.standardFunctionBlockContracts",
+          "structuredContent.backend.standardFunctionBlockContractQualified",
           "structuredContent.subject.candidateSha256",
           "structuredContent.subject.dependencyBundleSha256",
           "structuredContent.subject.discoveredFrameworkTests",

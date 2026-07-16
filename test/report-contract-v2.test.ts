@@ -108,11 +108,17 @@ describe("semantic report v2 contract", () => {
       coveredExecutableObjects: _coveredExecutableObjects,
       frameworkTargetCoverage: _frameworkTargetCoverage,
       assertions: _assertions,
+      assertionLedger: _assertionLedger,
       generatedTestNames: _generatedTestNames,
       ...legacyFields
     } = report;
     const { frameworkTestFiles: _frameworkTestFiles, ...legacyArtifacts } = legacyFields.artifacts ?? {};
-    const { executionAttempted: _executionAttempted, ...legacyBackend } = legacyFields.backend;
+    const {
+      executionAttempted: _executionAttempted,
+      standardFunctionBlockContracts: _standardFunctionBlockContracts,
+      standardFunctionBlockContractQualified: _standardFunctionBlockContractQualified,
+      ...legacyBackend
+    } = legacyFields.backend;
     const legacyReport = {
       ...legacyFields,
       backend: legacyBackend,
@@ -181,6 +187,18 @@ describe("semantic report v2 contract", () => {
       })
     ]);
     expect(promoted[0].message).not.toContain(workspace);
+
+    const completeGeneratedOutput = `generated.cpp:1: error: generated adapter detail\n${"x".repeat(20_000)}`;
+    const generatedDiagnostic = structuredCompilerOutputDiagnostics(
+      "compile_error",
+      { stdout: "", stderr: completeGeneratedOutput }
+    )[0];
+    expect(generatedDiagnostic.message).not.toContain("generated.cpp");
+    expect(generatedDiagnostic.technicalEvidence).toMatchObject({
+      sourceKind: "generated_cpp",
+      generatedArtifacts: ["generated.cpp"],
+      content: completeGeneratedOutput
+    });
   });
 
   it("advertises v2 result capability without changing the metadata-envelope version", () => {
@@ -191,6 +209,9 @@ describe("semantic report v2 contract", () => {
     expect(metadata.capabilities).toContain("frameworkTargetCoverageV1");
     expect(metadata.capabilities).toContain("frameworkMultiScanV1");
     expect(metadata.capabilities).toContain("twinCatShortCircuitOperatorsV1");
+    expect(metadata.capabilities).toContain("twinCatBistableAliasesV1");
+    expect(metadata.capabilities).toContain("frameworkAssertionLedgerV1");
+    expect(metadata.capabilities).toContain("frameworkAssertionProgressV1");
     expect(metadata.capabilities).toContain("candidateCompilePreflightV1");
   });
 });

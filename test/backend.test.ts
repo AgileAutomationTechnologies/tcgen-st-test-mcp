@@ -18,18 +18,24 @@ import {
   strucppTwinCatCompatibilityGap
 } from "../src/domain/reportSanitizer.js";
 import { generatedTestResultMismatch, toolHandlers } from "../src/mcp/tools.js";
-import { exampleNames, loadRequest, localStrucppRepo, withEnv } from "./helpers.js";
+import {
+  exampleNames,
+  loadRequest,
+  localStrucppRepo,
+  qualifiedCompilerContractFixture,
+  withEnv
+} from "./helpers.js";
 
 describe("STruC++ backend", () => {
   it("retains the complete qualified downstream SemVer identity", () => {
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.2")).toBe("0.5.13-tcgen.2");
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.2+win64.2")).toBe(
-      "0.5.13-tcgen.2+win64.2"
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.3")).toBe("0.5.13-tcgen.3");
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.3+win64.3")).toBe(
+      "0.5.13-tcgen.3+win64.3"
     );
-    expect(detectStrucppVersion("0.5.13-tcgen.2")).toBe("0.5.13-tcgen.2");
-    expect(detectStrucppVersion("evil 0.5.13-tcgen.2 suffix")).toBeUndefined();
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.2 extra")).toBeUndefined();
-    expect(testedStrucppVersion).toBe("0.5.13-tcgen.2");
+    expect(detectStrucppVersion("0.5.13-tcgen.3")).toBe("0.5.13-tcgen.3");
+    expect(detectStrucppVersion("evil 0.5.13-tcgen.3 suffix")).toBeUndefined();
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.3 extra")).toBeUndefined();
+    expect(testedStrucppVersion).toBe("0.5.13-tcgen.3");
   });
 
   it("rejects passing backend output that omits or invents generated tests", () => {
@@ -85,11 +91,23 @@ describe("STruC++ backend", () => {
       "normalized.st:175:17: error: Expected `END_CASE`, found identifier `E_TPPATTERN`.",
       " 175 | E_TPPattern.Single, E_TPPattern.Delayed, E_TPPattern.Retriggerable:"
     ].join("\n");
+    const namedBistablePin = [
+      "Error: C++ compilation failed:",
+      "<workspace>/generated.cpp:10959:20: error: 'class strucpp::RS' has no member named 'SET'",
+      "10959 | RSRETRIGOUTPUT.SET = XSETRS;",
+      "<workspace>/generated.cpp:10960:20: error: 'class strucpp::RS' has no member named 'RESET1'"
+    ].join("\n");
+    const invalidRsPins = "generated.cpp:1: error: 'class strucpp::RS' has no member named 'SET1'; RS.RESET";
 
     expect(strucppTwinCatCompatibilityGap("compile_error", accessor)?.code)
       .toBe("STRUCPP_TWINCAT_PROPERTY_ACCESSOR_LOCALS_UNSUPPORTED");
     expect(strucppTwinCatCompatibilityGap("compile_error", groupedCase)?.code)
       .toBe("STRUCPP_TWINCAT_GROUPED_QUALIFIED_CASE_LABELS_UNSUPPORTED");
+    expect(strucppTwinCatCompatibilityGap("compile_error", namedBistablePin)).toMatchObject({
+      code: "STRUCPP_TWINCAT_BISTABLE_NAMED_PIN_CONTRACT_MISMATCH",
+      detail: "backend_incompatibility"
+    });
+    expect(strucppTwinCatCompatibilityGap("compile_error", invalidRsPins)).toBeUndefined();
     expect(strucppTwinCatCompatibilityGap("compile_error", "normalized.st:1: error: Expected expression"))
       .toBeUndefined();
 
@@ -111,6 +129,31 @@ describe("STruC++ backend", () => {
       sourceKind: "backend",
       object: "FB_TPPattern",
       original: expect.objectContaining({ path: "pous/function blocks/fb_tppattern.tcpou" })
+    }));
+
+    const bistableDiagnostics = structuredCompilerOutputDiagnostics(
+      "compile_error",
+      { stdout: "", stderr: namedBistablePin },
+      undefined,
+      [{
+        generatedPath: "normalized.st",
+        generatedStartLine: 1,
+        generatedEndLine: 100,
+        original: { path: "pous/function blocks/fb_latch.tcpou", startLine: 1, endLine: 100 },
+        object: "FB_Latch",
+        sourceKind: "candidate"
+      }]
+    );
+    expect(bistableDiagnostics).toContainEqual(expect.objectContaining({
+      code: "STRUCPP_TWINCAT_BISTABLE_NAMED_PIN_CONTRACT_MISMATCH",
+      sourceKind: "backend",
+      detail: "backend_incompatibility",
+      message: expect.not.stringContaining("generated.cpp"),
+      technicalEvidence: expect.objectContaining({
+        sourceKind: "generated_cpp",
+        generatedArtifacts: ["generated.cpp"],
+        content: expect.stringContaining("RSRETRIGOUTPUT.SET")
+      })
     }));
   });
 
@@ -141,6 +184,7 @@ describe("STruC++ backend", () => {
     const validPack = await createRuntimeManifestFixture();
     const corruptPack = await createRuntimeManifestFixture({ corruptPath: "backend/runtime/include/support.hpp" });
     const missingLibraryPack = await createRuntimeManifestFixture({ omitStandardLibrary: true });
+    const missingContractPack = await createRuntimeManifestFixture({ omitStandardContract: true });
     try {
       await withEnv({ TCGEN_ST_TEST_PACK_DIR: validPack }, async () => {
         const diagnostics: Diagnostic[] = [];
@@ -169,8 +213,20 @@ describe("STruC++ backend", () => {
         expect(diagnostics).toContainEqual(expect.objectContaining({ code: "RUNTIME_MANIFEST_INVALID" }));
         expect(diagnostics.map(item => item.message).join("\n")).toContain("backend/libs/iec-standard-fb.stlib");
       });
+      await withEnv({ TCGEN_ST_TEST_PACK_DIR: missingContractPack }, async () => {
+        const diagnostics: Diagnostic[] = [];
+        expect(await verifyRuntimeManifest(diagnostics)).toBe(false);
+        expect(diagnostics).toContainEqual(expect.objectContaining({ code: "RUNTIME_MANIFEST_INVALID" }));
+        expect(diagnostics.map(item => item.message).join("\n"))
+          .toContain("backend/libs/iec-function-block-contracts.json");
+      });
     } finally {
-      await Promise.all([validPack, corruptPack, missingLibraryPack].map(path => rm(path, { recursive: true, force: true })));
+      await Promise.all([
+        validPack,
+        corruptPack,
+        missingLibraryPack,
+        missingContractPack
+      ].map(path => rm(path, { recursive: true, force: true })));
     }
   });
 
@@ -181,7 +237,7 @@ describe("STruC++ backend", () => {
       const check = await new StrucppBackend().check();
       expect(check.available).toBe(true);
       expect(["node", "native"]).toContain(check.cliMode);
-      expect(check.version).toContain("0.5.13-tcgen.2");
+      expect(check.version).toContain("0.5.13-tcgen.3");
     });
   }, 120_000);
 
@@ -235,6 +291,12 @@ describe("STruC++ backend", () => {
     const tempDir = await mkdtemp(join(tmpdir(), "tcgen-semantic-preflight-"));
     const fakeCli = join(tempDir, "fake-strucpp.mjs");
     try {
+      await mkdir(join(tempDir, "libs"), { recursive: true });
+      await writeFile(
+        join(tempDir, "libs", "iec-function-block-contracts.json"),
+        JSON.stringify(qualifiedCompilerContractFixture()),
+        "utf8"
+      );
       await writeFile(fakeCli, fakeSemanticRuntimeCli(false), "utf8");
       await withEnv({ STRUCPP_PATH: fakeCli, STRUCPP_GPP_PATH: gppExecutable }, async () => {
         const failed = await new StrucppBackend().check();
@@ -248,7 +310,7 @@ describe("STruC++ backend", () => {
         await writeFile(fakeCli, fakeSemanticRuntimeCli(true), "utf8");
         const repaired = await new StrucppBackend().check();
         expect(repaired.available).toBe(true);
-        expect(repaired.version).toBe("0.5.13-tcgen.2");
+        expect(repaired.version).toBe("0.5.13-tcgen.3");
       });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
@@ -398,13 +460,22 @@ describe("STruC++ backend", () => {
 
       expect(result.verdict).toBe("passed");
       expect(result.backend.executionAttempted).toBe(true);
-      expect(result.tests).toEqual([{ name: "framework FB_Test_TimerProbe", status: "passed" }]);
+      expect(result.tests).toEqual([expect.objectContaining({
+        name: "framework FB_Test_TimerProbe",
+        status: "passed",
+        startedAt: expect.any(String),
+        completedAt: expect.any(String)
+      })]);
     });
   }, 60_000);
 });
 
 async function createRuntimeManifestFixture(
-  options: { corruptPath?: string; omitStandardLibrary?: boolean } = {}
+  options: {
+    corruptPath?: string;
+    omitStandardLibrary?: boolean;
+    omitStandardContract?: boolean;
+  } = {}
 ): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "tcgen-runtime-manifest-"));
   const files: Record<string, string> = {
@@ -414,6 +485,11 @@ async function createRuntimeManifestFixture(
     "backend/runtime/include/support.hpp": "support"
   };
   if (!options.omitStandardLibrary) files["backend/libs/iec-standard-fb.stlib"] = "standard-library";
+  if (!options.omitStandardContract) {
+    files["backend/libs/iec-function-block-contracts.json"] = JSON.stringify(
+      qualifiedCompilerContractFixture()
+    );
+  }
   const entries = [];
   for (const [path, content] of Object.entries(files)) {
     const target = join(root, ...path.split("/"));
@@ -439,7 +515,7 @@ function dirnameForTest(path: string): string {
 function fakeSemanticRuntimeCli(passes: boolean): string {
   return [
     "if (process.argv.includes('--version')) {",
-    "  console.log('STruC++ version 0.5.13-tcgen.2');",
+    "  console.log('STruC++ version 0.5.13-tcgen.3');",
     "  process.exit(0);",
     "}",
     passes

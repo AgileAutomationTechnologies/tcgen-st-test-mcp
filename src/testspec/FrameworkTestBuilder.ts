@@ -19,6 +19,10 @@ import {
   FRAMEWORK_EXECUTION_CONTRACT,
   validateFrameworkExecutionContract
 } from "./FrameworkExecutionContract.js";
+import {
+  frameworkAssertionCheckpointDiagnostics,
+  withFrameworkAssertionCheckpoints
+} from "./FrameworkAssertionEvidence.js";
 
 // The offline adapter has no TwinCAT task clock. Advance a deterministic
 // one-millisecond task interval before each resumed execute scan so IEC timers
@@ -35,6 +39,7 @@ export interface FrameworkTestFile {
   discoveredFrameworkTests: string[];
   selectedFrameworkTests: string[];
   generatedTestNames: string[];
+  executionTestNames: string[];
   coveredExecutableObjects: string[];
   frameworkTargetCoverage: FrameworkTargetCoverage[];
   assertions: FrameworkAssertionEvidence[];
@@ -110,7 +115,9 @@ export class FrameworkTestBuilder {
       config.targetMappings,
       submittedSources
     );
+    const assertions = withFrameworkAssertionCheckpoints(targetCoverage.assertions);
     diagnostics.push(...targetCoverage.diagnostics);
+    diagnostics.push(...frameworkAssertionCheckpointDiagnostics(assertions));
     diagnostics.push(...validateFrameworkExecutionContract(
       config,
       selected,
@@ -130,7 +137,7 @@ export class FrameworkTestBuilder {
         candidates.map(testBlock => testBlock.name),
         selected.map(testBlock => testBlock.name),
         targetCoverage.coverage,
-        targetCoverage.assertions,
+        assertions,
         targetCoverage.frameworkTestFiles,
         config.executionContract === FRAMEWORK_EXECUTION_CONTRACT
           ? FRAMEWORK_EXECUTION_CONTRACT
@@ -139,20 +146,44 @@ export class FrameworkTestBuilder {
     }
 
     const maxScans = clampMaxScans(config.maxScans);
-    const content = emitWrapperTests(selected, maxScans);
+    const ledgerCapacity = assertionLedgerCapacity(assertions, maxScans);
+    if (ledgerCapacity > 10_000) {
+      diagnostics.push(
+        diagnostic(
+          "error",
+          "TCFRAMEWORK_ASSERTION_LEDGER_CAPACITY_EXCEEDED",
+          `The exact Framework test requires a worst-case assertion ledger capacity of ${ledgerCapacity}, above the qualified limit of 10000. Reduce frameworkTest.maxScans or split the test into smaller independent test FBs.`
+        )
+      );
+      return emptyFrameworkTest(
+        diagnostics,
+        candidates.map(testBlock => testBlock.name),
+        selected.map(testBlock => testBlock.name),
+        targetCoverage.coverage,
+        assertions,
+        targetCoverage.frameworkTestFiles,
+        FRAMEWORK_EXECUTION_CONTRACT
+      );
+    }
+    const wrappers = emitWrapperTests(selected, maxScans, assertions);
+    const content = wrappers.content;
     return {
       path: "semantic_framework_tests.st",
       content,
       diagnostics,
       hash: sha256(content),
-      sourceFiles: [{ path: "tcgen_framework_shim.st", content: frameworkShim }],
+      sourceFiles: [{
+        path: "tcgen_framework_shim.st",
+        content: frameworkShim(ledgerCapacity, assertions)
+      }],
       mode: "framework",
       discoveredFrameworkTests: candidates.map(testBlock => testBlock.name),
       selectedFrameworkTests: selected.map(testBlock => testBlock.name),
-      generatedTestNames: selected.map(testBlock => frameworkWrapperName(testBlock.name)),
+      generatedTestNames: wrappers.generatedTestNames,
+      executionTestNames: wrappers.executionTestNames,
       coveredExecutableObjects: selected.map(testBlock => testBlock.name),
       frameworkTargetCoverage: targetCoverage.coverage,
-      assertions: targetCoverage.assertions,
+      assertions,
       frameworkTestFiles: targetCoverage.frameworkTestFiles,
       executionContract: FRAMEWORK_EXECUTION_CONTRACT
     };
@@ -188,6 +219,7 @@ function emptyFrameworkTest(
     discoveredFrameworkTests,
     selectedFrameworkTests,
     generatedTestNames: [],
+    executionTestNames: [],
     coveredExecutableObjects: [],
     frameworkTargetCoverage,
     assertions,
@@ -263,51 +295,116 @@ function clampMaxScans(value: number | undefined): number {
   return Math.min(Math.max(value as number, 1), 10_000);
 }
 
-function emitWrapperTests(testBlocks: TcGenObject[], maxScans: number): string {
-  const lines: string[] = [];
-  for (const testBlock of testBlocks) {
-    const instance = sanitizeIdentifier(`test_${testBlock.name}`);
-    lines.push(`TEST '${escapeString(frameworkWrapperName(testBlock.name))}'`);
-    lines.push("VAR");
-    lines.push(`    ${instance} : ${testBlock.name};`);
-    lines.push("    tcframework_execute_complete : BOOL;");
-    lines.push("    result : ST_TestCaseResult;");
-    lines.push("END_VAR");
-    lines.push(`${instance}.m_xSetup(i_xTrigger := TRUE);`);
-    lines.push(`${instance}.m_xSetup(i_xTrigger := FALSE);`);
-    lines.push(`${instance}.m_xExecute(i_xTrigger := TRUE);`);
-    lines.push(`tcframework_execute_complete := NOT ${instance}.m_xIsBusy();`);
-    // The qualified STruC++ runtime accepts ADVANCE_TIME only as a top-level TEST statement.
-    // Emit bounded scan slots rather than nesting it in FOR/IF. Time after an
-    // early completion is harmless; the exact test FB is resumed only while
-    // it reports busy.
-    for (let scan = 1; scan <= maxScans; scan += 1) {
-      lines.push(`ADVANCE_TIME(${FRAMEWORK_SCAN_TIME_NANOSECONDS});`);
-      lines.push("IF NOT tcframework_execute_complete THEN");
-      lines.push(`    ${instance}.m_xExecute(i_xTrigger := FALSE);`);
-      lines.push(`    tcframework_execute_complete := NOT ${instance}.m_xIsBusy();`);
-      lines.push("END_IF");
-    }
-    lines.push("IF tcframework_execute_complete THEN");
-    lines.push(`    ${instance}.m_xTeardown(i_xTrigger := TRUE);`);
-    lines.push(`    ${instance}.m_xTeardown(i_xTrigger := FALSE);`);
-    lines.push("END_IF");
-    lines.push(`result := ${instance}.m_stGetResult();`);
-    lines.push("ASSERT_TRUE(tcframework_execute_complete);");
-    lines.push("ASSERT_TRUE(result.udiAssertions > 0);");
-    lines.push("ASSERT_EQ(result.sErrorMessage, '');");
-    lines.push("ASSERT_EQ(result.udiFailed, 0);");
-    lines.push("ASSERT_EQ(result.eState, eTestState_Passed);");
-    lines.push("END_TEST", "");
+function assertionLedgerCapacity(
+  assertions: readonly FrameworkAssertionEvidence[],
+  maxScans: number
+): number {
+  const countByBlock = new Map<string, number>();
+  for (const assertion of assertions) {
+    countByBlock.set(
+      assertion.testFunctionBlock,
+      (countByBlock.get(assertion.testFunctionBlock) ?? 0) + 1
+    );
   }
-  return lines.join("\n").trimEnd() + "\n";
+  const maxCallSites = Math.max(1, ...countByBlock.values());
+  return maxCallSites * (maxScans + 1);
+}
+
+function emitWrapperTests(
+  testBlocks: TcGenObject[],
+  maxScans: number,
+  assertions: readonly FrameworkAssertionEvidence[]
+): { content: string; generatedTestNames: string[]; executionTestNames: string[] } {
+  const lines: string[] = [];
+  const generatedTestNames: string[] = [];
+  const executionTestNames: string[] = [];
+  for (const testBlock of testBlocks) {
+    const blockAssertions = assertions.filter(
+      assertion => assertion.testFunctionBlock.toLowerCase() === testBlock.name.toLowerCase()
+    );
+    const captureName = frameworkWrapperName(testBlock.name);
+    generatedTestNames.push(captureName);
+    executionTestNames.push(captureName);
+    lines.push(`TEST '${escapeString(captureName)}'`);
+    emitFreshFrameworkExecution(lines, testBlock.name, maxScans, "capture");
+    lines.push("ASSERT_TRUE(GVL_TcGenAssertionLedger__diCount > 0);");
+    lines.push("END_TEST", "");
+
+    for (const assertion of blockAssertions) {
+      const checkpointTestName = assertion.checkpointTestName ?? "";
+      executionTestNames.push(checkpointTestName);
+      lines.push(`TEST '${escapeString(checkpointTestName)}'`);
+      emitFreshFrameworkExecution(
+        lines,
+        testBlock.name,
+        maxScans,
+        `checkpoint_${assertion.checkpointOrdinal ?? 0}`
+      );
+      lines.push(
+        `ASSERT_TRUE(TcGenAssertionLedgerReached('${escapeString(assertion.assertionId)}'), 'TCFRAMEWORK_ASSERTION_REACHED:${escapeString(assertion.checkpointId ?? assertion.assertionId)}');`
+      );
+      lines.push(
+        `ASSERT_TRUE(TcGenAssertionLedgerPassed('${escapeString(assertion.assertionId)}'), 'TCFRAMEWORK_ASSERTION_PASSED:${escapeString(assertion.checkpointId ?? assertion.assertionId)}');`
+      );
+      lines.push("END_TEST", "");
+    }
+  }
+  return {
+    content: lines.join("\n").trimEnd() + "\n",
+    generatedTestNames,
+    executionTestNames
+  };
+}
+
+function emitFreshFrameworkExecution(
+  lines: string[],
+  testBlockName: string,
+  maxScans: number,
+  suffix: string
+): void {
+  const instance = sanitizeIdentifier(`test_${testBlockName}_${suffix}`);
+  lines.push("VAR");
+  lines.push(`    ${instance} : ${testBlockName};`);
+  lines.push("    tcframework_execute_complete : BOOL;");
+  lines.push("    result : ST_TestCaseResult;");
+  lines.push("END_VAR");
+  lines.push(`${instance}.m_xSetup(i_xTrigger := TRUE);`);
+  lines.push(`${instance}.m_xSetup(i_xTrigger := FALSE);`);
+  lines.push(`${instance}.m_xExecute(i_xTrigger := TRUE);`);
+  lines.push(`tcframework_execute_complete := NOT ${instance}.m_xIsBusy();`);
+  // ADVANCE_TIME is accepted only at TEST top level. Every checkpoint owns a
+  // fresh test/CUT instance, so simultaneous failures are independently
+  // observable without sharing the parent test's mutable assertion ledger.
+  for (let scan = 1; scan <= maxScans; scan += 1) {
+    lines.push(`ADVANCE_TIME(${FRAMEWORK_SCAN_TIME_NANOSECONDS});`);
+    lines.push("IF NOT tcframework_execute_complete THEN");
+    lines.push(`    ${instance}.m_xExecute(i_xTrigger := FALSE);`);
+    lines.push(`    tcframework_execute_complete := NOT ${instance}.m_xIsBusy();`);
+    lines.push("END_IF");
+  }
+  lines.push("IF tcframework_execute_complete THEN");
+  lines.push(`    ${instance}.m_xTeardown(i_xTrigger := TRUE);`);
+  lines.push(`    ${instance}.m_xTeardown(i_xTrigger := FALSE);`);
+  lines.push("END_IF");
+  lines.push(`result := ${instance}.m_stGetResult();`);
+  lines.push("ASSERT_TRUE(tcframework_execute_complete);");
+  lines.push("ASSERT_FALSE(GVL_TcGenAssertionLedger__xOverflow);");
 }
 
 function frameworkWrapperName(testBlockName: string): string {
   return `framework ${testBlockName}`;
 }
 
-const frameworkShim = `TYPE E_TestState :
+function frameworkShim(
+  assertionLedgerCapacity: number,
+  assertions: readonly FrameworkAssertionEvidence[]
+): string {
+  const assertionIdentityCases = assertions.map(assertion => [
+    `IF i_sMessage = '${escapeString(assertion.description ?? "")}' THEN`,
+    `    TcGenAssertionIdForMessage := '${escapeString(assertion.assertionId)}';`,
+    "END_IF"
+  ].join("\n")).join("\n");
+  return `TYPE E_TestState :
 (
     eTestState_Idle       := 0,
     eTestState_Running    := 1,
@@ -343,7 +440,55 @@ VAR_GLOBAL
     GVL_TestResults__udiFailed      : UDINT;
     GVL_TestResults__udiErrors      : UDINT;
     GVL_TestResults__udiSkipped     : UDINT;
+    GVL_TcGenAssertionLedger__diCount    : DINT;
+    GVL_TcGenAssertionLedger__xOverflow : BOOL;
+    GVL_TcGenAssertionLedger__aPassed   : ARRAY[1..${assertionLedgerCapacity}] OF BOOL;
+    GVL_TcGenAssertionLedger__aMessage  : ARRAY[1..${assertionLedgerCapacity}] OF STRING(255);
+    GVL_TcGenAssertionLedger__aAssertionId : ARRAY[1..${assertionLedgerCapacity}] OF STRING(80);
 END_VAR
+
+FUNCTION TcGenAssertionIdForMessage : STRING(80)
+VAR_INPUT
+    i_sMessage : STRING(255);
+END_VAR
+TcGenAssertionIdForMessage := '';
+${assertionIdentityCases}
+END_FUNCTION
+
+FUNCTION TcGenAssertionLedgerReached : BOOL
+VAR_INPUT
+    i_sAssertionId : STRING(80);
+END_VAR
+VAR
+    diIndex : DINT;
+END_VAR
+TcGenAssertionLedgerReached := FALSE;
+FOR diIndex := 1 TO GVL_TcGenAssertionLedger__diCount DO
+    IF GVL_TcGenAssertionLedger__aAssertionId[diIndex] = i_sAssertionId THEN
+        TcGenAssertionLedgerReached := TRUE;
+    END_IF
+END_FOR
+END_FUNCTION
+
+FUNCTION TcGenAssertionLedgerPassed : BOOL
+VAR_INPUT
+    i_sAssertionId : STRING(80);
+END_VAR
+VAR
+    diIndex : DINT;
+    xReached : BOOL;
+    xAllPassed : BOOL := TRUE;
+END_VAR
+FOR diIndex := 1 TO GVL_TcGenAssertionLedger__diCount DO
+    IF GVL_TcGenAssertionLedger__aAssertionId[diIndex] = i_sAssertionId THEN
+        xReached := TRUE;
+        IF NOT GVL_TcGenAssertionLedger__aPassed[diIndex] THEN
+            xAllPassed := FALSE;
+        END_IF
+    END_IF
+END_FOR
+TcGenAssertionLedgerPassed := xReached AND xAllPassed;
+END_FUNCTION
 
 FUNCTION_BLOCK FB_TestCaseBase
 VAR
@@ -394,6 +539,8 @@ IF i_xTrigger THEN
     _eExecuteState := eTestState_Idle;
     _eTeardownState := eTestState_Idle;
     _xPhaseBusy := FALSE;
+    GVL_TcGenAssertionLedger__diCount := 0;
+    GVL_TcGenAssertionLedger__xOverflow := FALSE;
 END_IF
 m_xSetup := TRUE;
 END_METHOD
@@ -425,23 +572,40 @@ METHOD PUBLIC m_xIsBusy : BOOL
 m_xIsBusy := _xPhaseBusy;
 END_METHOD
 
-METHOD PROTECTED m_xAssertTrue : BOOL
+METHOD PRIVATE m_xRecordAssertion : BOOL
 VAR_INPUT
-    i_xCondition : BOOL;
-    i_sMessage   : STRING(255);
+    i_xPassed  : BOOL;
+    i_sMessage : STRING(255);
 END_VAR
 _udiAssertions := _udiAssertions + 1;
-IF i_xCondition THEN
+GVL_TcGenAssertionLedger__diCount := GVL_TcGenAssertionLedger__diCount + 1;
+IF GVL_TcGenAssertionLedger__diCount <= ${assertionLedgerCapacity} THEN
+    GVL_TcGenAssertionLedger__aPassed[GVL_TcGenAssertionLedger__diCount] := i_xPassed;
+    GVL_TcGenAssertionLedger__aMessage[GVL_TcGenAssertionLedger__diCount] := i_sMessage;
+    GVL_TcGenAssertionLedger__aAssertionId[GVL_TcGenAssertionLedger__diCount] := TcGenAssertionIdForMessage(i_sMessage);
+ELSE
+    GVL_TcGenAssertionLedger__xOverflow := TRUE;
+END_IF
+IF i_xPassed THEN
     _udiPassed := _udiPassed + 1;
-    m_xAssertTrue := TRUE;
 ELSE
     _udiFailed := _udiFailed + 1;
-    m_xAssertTrue := FALSE;
     IF _sErrorMessage = '' THEN
         _sErrorMessage := i_sMessage;
     END_IF
     _eState := eTestState_Failed;
 END_IF
+m_xRecordAssertion := i_xPassed;
+END_METHOD
+
+METHOD PROTECTED m_xAssertTrue : BOOL
+VAR_INPUT
+    i_xCondition : BOOL;
+    i_sMessage   : STRING(255);
+END_VAR
+m_xAssertTrue := m_xRecordAssertion(
+    i_xPassed := i_xCondition,
+    i_sMessage := i_sMessage);
 END_METHOD
 
 METHOD PROTECTED m_xAssertFalse : BOOL
@@ -449,18 +613,9 @@ VAR_INPUT
     i_xCondition : BOOL;
     i_sMessage   : STRING(255);
 END_VAR
-_udiAssertions := _udiAssertions + 1;
-IF NOT i_xCondition THEN
-    _udiPassed := _udiPassed + 1;
-    m_xAssertFalse := TRUE;
-ELSE
-    _udiFailed := _udiFailed + 1;
-    m_xAssertFalse := FALSE;
-    IF _sErrorMessage = '' THEN
-        _sErrorMessage := i_sMessage;
-    END_IF
-    _eState := eTestState_Failed;
-END_IF
+m_xAssertFalse := m_xRecordAssertion(
+    i_xPassed := NOT i_xCondition,
+    i_sMessage := i_sMessage);
 END_METHOD
 
 METHOD PROTECTED m_xAssertEqualBool : BOOL
@@ -469,18 +624,9 @@ VAR_INPUT
     i_xActual   : BOOL;
     i_sMessage  : STRING(255);
 END_VAR
-_udiAssertions := _udiAssertions + 1;
-IF i_xExpected = i_xActual THEN
-    _udiPassed := _udiPassed + 1;
-    m_xAssertEqualBool := TRUE;
-ELSE
-    _udiFailed := _udiFailed + 1;
-    m_xAssertEqualBool := FALSE;
-    IF _sErrorMessage = '' THEN
-        _sErrorMessage := i_sMessage;
-    END_IF
-    _eState := eTestState_Failed;
-END_IF
+m_xAssertEqualBool := m_xRecordAssertion(
+    i_xPassed := i_xExpected = i_xActual,
+    i_sMessage := i_sMessage);
 END_METHOD
 
 METHOD PROTECTED m_xAssertEqualDint : BOOL
@@ -489,18 +635,9 @@ VAR_INPUT
     i_nActual   : DINT;
     i_sMessage  : STRING(255);
 END_VAR
-_udiAssertions := _udiAssertions + 1;
-IF i_nExpected = i_nActual THEN
-    _udiPassed := _udiPassed + 1;
-    m_xAssertEqualDint := TRUE;
-ELSE
-    _udiFailed := _udiFailed + 1;
-    m_xAssertEqualDint := FALSE;
-    IF _sErrorMessage = '' THEN
-        _sErrorMessage := i_sMessage;
-    END_IF
-    _eState := eTestState_Failed;
-END_IF
+m_xAssertEqualDint := m_xRecordAssertion(
+    i_xPassed := i_nExpected = i_nActual,
+    i_sMessage := i_sMessage);
 END_METHOD
 
 METHOD PROTECTED m_xAssertEqualLreal : BOOL
@@ -509,18 +646,9 @@ VAR_INPUT
     i_lrActual   : LREAL;
     i_sMessage   : STRING(255);
 END_VAR
-_udiAssertions := _udiAssertions + 1;
-IF i_lrExpected = i_lrActual THEN
-    _udiPassed := _udiPassed + 1;
-    m_xAssertEqualLreal := TRUE;
-ELSE
-    _udiFailed := _udiFailed + 1;
-    m_xAssertEqualLreal := FALSE;
-    IF _sErrorMessage = '' THEN
-        _sErrorMessage := i_sMessage;
-    END_IF
-    _eState := eTestState_Failed;
-END_IF
+m_xAssertEqualLreal := m_xRecordAssertion(
+    i_xPassed := i_lrExpected = i_lrActual,
+    i_sMessage := i_sMessage);
 END_METHOD
 
 METHOD PROTECTED m_xAssertEqualString : BOOL
@@ -529,18 +657,9 @@ VAR_INPUT
     i_sActual   : STRING(255);
     i_sMessage  : STRING(255);
 END_VAR
-_udiAssertions := _udiAssertions + 1;
-IF i_sExpected = i_sActual THEN
-    _udiPassed := _udiPassed + 1;
-    m_xAssertEqualString := TRUE;
-ELSE
-    _udiFailed := _udiFailed + 1;
-    m_xAssertEqualString := FALSE;
-    IF _sErrorMessage = '' THEN
-        _sErrorMessage := i_sMessage;
-    END_IF
-    _eState := eTestState_Failed;
-END_IF
+m_xAssertEqualString := m_xRecordAssertion(
+    i_xPassed := i_sExpected = i_sActual,
+    i_sMessage := i_sMessage);
 END_METHOD
 
 METHOD PROTECTED m_xAssertInRange : BOOL
@@ -550,21 +669,13 @@ VAR_INPUT
     i_lrUpper   : LREAL;
     i_sMessage  : STRING(255);
 END_VAR
-_udiAssertions := _udiAssertions + 1;
-IF (i_lrValue >= i_lrLower) AND (i_lrValue <= i_lrUpper) THEN
-    _udiPassed := _udiPassed + 1;
-    m_xAssertInRange := TRUE;
-ELSE
-    _udiFailed := _udiFailed + 1;
-    m_xAssertInRange := FALSE;
-    IF _sErrorMessage = '' THEN
-        _sErrorMessage := i_sMessage;
-    END_IF
-    _eState := eTestState_Failed;
-END_IF
+m_xAssertInRange := m_xRecordAssertion(
+    i_xPassed := (i_lrValue >= i_lrLower) AND (i_lrValue <= i_lrUpper),
+    i_sMessage := i_sMessage);
 END_METHOD
 END_FUNCTION_BLOCK
 `;
+}
 
 function sanitizeIdentifier(value: string): string {
   const cleaned = value.replace(/[^A-Za-z0-9_]/g, "_");

@@ -11,7 +11,7 @@ describe("framework-style semantic tests", () => {
       executionAttempted: true,
       executable: "strucpp-win.exe",
       cliMode: "native",
-      version: "STruC++ version 0.5.13-tcgen.2",
+      version: "STruC++ version 0.5.13-tcgen.3",
       stdout: "PASS: stale framework test",
       stderr: "",
       exitCode: 0,
@@ -53,6 +53,13 @@ describe("framework-style semantic tests", () => {
       diagnostics: Array<{ code: string }>;
       subject: { discoveredFrameworkTests?: string[]; selectedFrameworkTests?: string[] };
       executionContract?: string;
+      assertions: Array<{
+        assertionId: string;
+        checkpointId?: string;
+        checkpointTestName?: string;
+        checkpointOrdinal?: number;
+      }>;
+      assertionLedger: { complete: boolean; expected: number };
     };
 
     expect(result.normalization.status).toBe("rewritten");
@@ -66,19 +73,35 @@ describe("framework-style semantic tests", () => {
     expect(result.generatedTestFile.path).toBe("semantic_framework_tests.st");
     expect(result.generatedTestFile).not.toEqual(result.testFile);
     expect(result.generatedTestFile.content).toContain("TEST 'framework FB_Test_LimitCounter'");
-    expect(result.generatedTestFile.content.match(/ADVANCE_TIME\(1000000\)/g)).toHaveLength(20);
+    // One parent execution plus one fresh test/CUT execution per assertion.
+    expect(result.generatedTestFile.content.match(/ADVANCE_TIME\(1000000\)/g)).toHaveLength(100);
     expect(result.generatedTestFile.content).toContain("m_xExecute(i_xTrigger := TRUE)");
-    expect(result.generatedTestFile.content.match(/m_xExecute\(i_xTrigger := TRUE\)/g)).toHaveLength(1);
+    expect(result.generatedTestFile.content.match(/m_xExecute\(i_xTrigger := TRUE\)/g)).toHaveLength(5);
     expect(result.generatedTestFile.content).toContain("m_xExecute(i_xTrigger := FALSE)");
-    expect(result.generatedTestFile.content.match(/m_xExecute\(i_xTrigger := FALSE\)/g)).toHaveLength(20);
+    expect(result.generatedTestFile.content.match(/m_xExecute\(i_xTrigger := FALSE\)/g)).toHaveLength(100);
+    expect(result.generatedTestFile.content).toContain("test_FB_Test_LimitCounter_checkpoint_1");
+    expect(result.generatedTestFile.content).toContain("test_FB_Test_LimitCounter_checkpoint_4");
     expect(result.generatedTestFile.content.indexOf("ADVANCE_TIME(1000000)"))
       .toBeLessThan(result.generatedTestFile.content.indexOf("m_xExecute(i_xTrigger := FALSE)"));
     expect(result.generatedTestFile.content.indexOf("m_xExecute(i_xTrigger := FALSE)"))
       .toBeLessThan(result.generatedTestFile.content.indexOf("m_xIsBusy()", result.generatedTestFile.content.indexOf("ADVANCE_TIME")));
     expect(result.generatedTestFile.content).toContain("ASSERT_TRUE(tcframework_execute_complete);");
     expect(result.executionContract).toBe("tcgen-framework-multiscan-v1");
-    expect(result.generatedTestFile.content).toContain("ASSERT_EQ(result.sErrorMessage, '');");
-    expect(result.generatedTestFile.content).toContain("ASSERT_TRUE(result.udiAssertions > 0);");
+    expect(result.generatedTestFile.content).toContain("TcGenAssertionLedgerReached(");
+    expect(result.generatedTestFile.content).toContain("TcGenAssertionLedgerPassed(");
+    expect(result.generatedTestFile.content).not.toContain("ASSERT_EQ(result.sErrorMessage, '');");
+    expect(result.assertions).toHaveLength(4);
+    expect(result.assertions.every(assertion =>
+      /^checkpoint:[a-f0-9]{64}$/.test(assertion.checkpointId ?? "")
+      && /^framework checkpoint FB_Test_LimitCounter [a-f0-9]{64}$/.test(assertion.checkpointTestName ?? "")
+      && Number.isInteger(assertion.checkpointOrdinal)
+    )).toBe(true);
+    expect(result.normalizedFiles[0].content).toContain("GVL_TcGenAssertionLedger__aAssertionId");
+    expect(result.normalizedFiles[0].content).toContain(result.assertions[0].assertionId);
+    expect(result.generatedTestFile.content).toContain(
+      `TcGenAssertionLedgerReached('${result.assertions[0].assertionId}')`
+    );
+    expect(result.assertionLedger).toMatchObject({ complete: false, expected: 4 });
     expect(result.frameworkTargetCoverage).toEqual([
       {
         testFunctionBlock: "FB_Test_LimitCounter",

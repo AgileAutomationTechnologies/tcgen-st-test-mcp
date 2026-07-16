@@ -6,6 +6,13 @@ import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:pat
 import { spawn } from "node:child_process";
 import { BackendCheckResult, Diagnostic, diagnostic } from "../domain/models.js";
 import { sanitizeCompilerOutput } from "../domain/reportSanitizer.js";
+import {
+  copyStandardFunctionBlockContracts,
+  loadStandardFunctionBlockContracts,
+  standardFunctionBlockContractCandidates,
+  standardFunctionBlockContractGeneration,
+  unavailableStandardFunctionBlockContracts
+} from "./StandardFunctionBlockContracts.js";
 
 export interface BackendRunResult {
   status: "passed" | "failed" | "compile_error" | "backend_error" | "timeout";
@@ -21,7 +28,15 @@ export interface BackendRunResult {
   exitCode: number | null;
   durationMs: number;
   diagnostics: Diagnostic[];
-  tests: Array<{ name: string; status: "passed" | "failed" | "skipped"; message?: string }>;
+  tests: Array<{
+    name: string;
+    status: "passed" | "failed" | "skipped";
+    message?: string;
+    startedAt?: string;
+    completedAt?: string;
+  }>;
+  standardFunctionBlockContracts: ReturnType<typeof copyStandardFunctionBlockContracts>;
+  standardFunctionBlockContractQualified: boolean;
 }
 
 type ResolvedCommand = {
@@ -41,20 +56,50 @@ type ResolvedGpp = {
 type ResolvedBackend = {
   command: ResolvedCommand;
   version: string;
+  standardFunctionBlockContracts: ReturnType<typeof copyStandardFunctionBlockContracts>;
 };
 
-export const testedStrucppVersion = "0.5.13-tcgen.2";
+export const testedStrucppVersion = "0.5.13-tcgen.3";
 const developmentMsys2Gpp = "C:\\msys64\\ucrt64\\bin\\g++.exe";
 const bundledStrucppRelativePath = join("backend", "strucpp-win.exe");
 const bundledGppRelativePath = join("toolchain", "mingw64", "bin", "g++.exe");
 const verifiedRuntimeManifests = new Set<string>();
-const semanticRuntimeChecks = new Map<string, Promise<SemanticRuntimeCheck>>();
+const runtimeManifestChecks = new Map<string, Promise<string | undefined>>();
+const cpp17CompilerChecks = new Map<
+  string,
+  { generation: string; result: Promise<Cpp17CompilerCheck> }
+>();
+const semanticRuntimeChecks = new Map<
+  string,
+  { generation: string; result: Promise<SemanticRuntimeCheck> }
+>();
 const semanticRejectedStrucppOverrides = new Map<string, string>();
 
 type SemanticRuntimeCheck = {
   available: boolean;
   detail?: string;
 };
+
+type Cpp17CompilerCheck = {
+  available: boolean;
+  code?: "CPP17_COMPILE_FAILED" | "CPP17_EXECUTION_FAILED" | "CPP17_SELF_TEST_ERROR";
+  detail?: string;
+};
+
+function standardFunctionBlockQualification(
+  contracts: ReturnType<typeof copyStandardFunctionBlockContracts> | undefined,
+  qualified: boolean
+): Pick<
+  BackendCheckResult,
+  "standardFunctionBlockContracts" | "standardFunctionBlockContractQualified"
+> {
+  return {
+    standardFunctionBlockContracts: copyStandardFunctionBlockContracts(
+      contracts ?? unavailableStandardFunctionBlockContracts()
+    ),
+    standardFunctionBlockContractQualified: qualified
+  };
+}
 
 export class StrucppBackend {
   async check(): Promise<BackendCheckResult> {
@@ -70,6 +115,7 @@ export class StrucppBackend {
         backend: "strucpp",
         available: false,
         testedVersion: testedStrucppVersion,
+        ...standardFunctionBlockQualification(undefined, false),
         diagnostics:
           diagnostics.length > 0
             ? diagnostics
@@ -88,6 +134,10 @@ export class StrucppBackend {
       testedVersion: testedStrucppVersion,
       gppAvailable: gpp.available,
       gppExecutable: gpp.executable,
+      ...standardFunctionBlockQualification(
+        backend.standardFunctionBlockContracts,
+        runtimeIntegrity && gpp.available
+      ),
       diagnostics
     };
   }
@@ -95,13 +145,19 @@ export class StrucppBackend {
   async run(
     sourcePaths: string[],
     testPath: string,
-    options: { timeoutMs?: number; signal?: AbortSignal } = {}
+    options: {
+      timeoutMs?: number;
+      signal?: AbortSignal;
+      onTestResult?: (test: BackendRunResult["tests"][number]) => void;
+    } = {}
   ): Promise<BackendRunResult> {
     const diagnostics: Diagnostic[] = [];
     const gpp = await resolveCompatibleGpp(true);
     diagnostics.push(...gpp.diagnostics);
     const runtimeIntegrity = await verifyRuntimeManifest(diagnostics);
-    const backend = await resolveCompatibleStrucpp(diagnostics);
+    const backend = runtimeIntegrity && gpp.available && gpp.executable
+      ? await resolveRuntimeCompatibleStrucpp(gpp.executable, diagnostics)
+      : await resolveCompatibleStrucpp(diagnostics);
     if (!backend) {
       return {
         status: "backend_error",
@@ -114,7 +170,8 @@ export class StrucppBackend {
           diagnostics.length > 0
             ? diagnostics
             : [diagnostic("error", "STRUCPP_NOT_FOUND", "STruC++ executable was not found via STRUCPP_PATH or PATH.")],
-        tests: []
+        tests: [],
+        ...standardFunctionBlockQualification(undefined, false)
       };
     }
 
@@ -132,7 +189,8 @@ export class StrucppBackend {
         exitCode: null,
         durationMs: 0,
         diagnostics,
-        tests: []
+        tests: [],
+        ...standardFunctionBlockQualification(backend.standardFunctionBlockContracts, false)
       };
     }
     if (!gpp.available || !gpp.executable) {
@@ -150,20 +208,47 @@ export class StrucppBackend {
         exitCode: null,
         durationMs: 0,
         diagnostics,
-        tests: []
+        tests: [],
+        ...standardFunctionBlockQualification(backend.standardFunctionBlockContracts, false)
       };
     }
 
     const timeoutMs = Math.min(Math.max(options.timeoutMs ?? 30_000, 1_000), 120_000);
     const args = [...sourcePaths, "--gpp", gpp.executable, "--test", testPath];
     const started = Date.now();
+    const startedAt = new Date(started).toISOString();
+    const observedTests = new Map<string, BackendRunResult["tests"][number]>();
+    const pendingLiveFailureDetails: string[] = [];
     const result = await spawnWithTimeout(
       backend.command,
       args,
       timeoutMs,
       gpp.executable,
       dirname(testPath),
-      options.signal
+      options.signal,
+      line => {
+        const trimmed = line.trim();
+        if (
+          /^ASSERT_[A-Z_]+\s+failed:/i.test(trimmed)
+          || (pendingLiveFailureDetails.length > 0 && /^at\s+.+:\d+/i.test(trimmed))
+        ) {
+          pendingLiveFailureDetails.push(trimmed);
+          return;
+        }
+        const parsed = parseTestResultLine(line);
+        if (!parsed || observedTests.has(parsed.name)) return;
+        const test = {
+          ...parsed,
+          ...(parsed.status === "failed" && pendingLiveFailureDetails.length > 0
+            ? { message: pendingLiveFailureDetails.join("\n") }
+            : {}),
+          startedAt,
+          completedAt: new Date().toISOString()
+        };
+        pendingLiveFailureDetails.length = 0;
+        observedTests.set(test.name, test);
+        options.onTestResult?.(test);
+      }
     );
     if (result.cancelled) {
       diagnostics.push(diagnostic("error", "SANDBOX_CANCELLED", "STruC++ execution was cancelled and its process tree was terminated."));
@@ -179,6 +264,7 @@ export class StrucppBackend {
         durationMs: Date.now() - started,
         diagnostics,
         tests: [],
+        ...standardFunctionBlockQualification(backend.standardFunctionBlockContracts, true),
         ...result
       };
     }
@@ -196,11 +282,17 @@ export class StrucppBackend {
         durationMs: Date.now() - started,
         diagnostics,
         tests: [],
+        ...standardFunctionBlockQualification(backend.standardFunctionBlockContracts, true),
         ...result
       };
     }
 
-    const tests = parseTests(result.stdout + "\n" + result.stderr);
+    const completedAt = new Date().toISOString();
+    const tests = parseTests(result.stdout + "\n" + result.stderr).map(test => ({
+      ...test,
+      startedAt,
+      completedAt: observedTests.get(test.name)?.completedAt ?? completedAt
+    }));
     const status = classifyBackendRun(result.exitCode, result.stdout, result.stderr, tests);
     if (result.exitCode === 0 && executedTestCount(tests) === 0) {
       diagnostics.push(
@@ -223,6 +315,7 @@ export class StrucppBackend {
       durationMs: Date.now() - started,
       diagnostics,
       tests,
+      ...standardFunctionBlockQualification(backend.standardFunctionBlockContracts, true),
       ...result
     };
   }
@@ -262,19 +355,33 @@ async function resolveCompatibleStrucpp(diagnostics: Diagnostic[]): Promise<Reso
       const version = await runVersion(override, overrideDiagnostics);
       const detected = detectStrucppVersion(version);
       if (detected === testedStrucppVersion) {
+        const contract = await resolveStandardFunctionBlockContracts(override, overrideDiagnostics);
         const overrideIdentity = resolve(override.executable).toLowerCase();
         const overrideGeneration = await semanticRuntimeGeneration(override);
-        if (semanticRejectedStrucppOverrides.get(overrideIdentity) !== overrideGeneration) {
+        if (
+          contract
+          && semanticRejectedStrucppOverrides.get(overrideIdentity) !== overrideGeneration
+        ) {
           semanticRejectedStrucppOverrides.delete(overrideIdentity);
           diagnostics.push(...overrideDiagnostics);
-          return { command: override, version: detected };
+          return {
+            command: override,
+            version: detected,
+            standardFunctionBlockContracts: contract
+          };
         }
         diagnostics.push(
-          ...overrideDiagnostics,
+          ...overrideDiagnostics.map(item => ({
+            ...item,
+            severity: "warning" as const,
+            blocking: false
+          })),
           diagnostic(
             "warning",
             "STRUCPP_OVERRIDE_RUNTIME_INCOMPATIBLE",
-            "The configured STruC++ override previously failed the semantic runtime self-test; using the bundled runtime.",
+            contract
+              ? "The configured STruC++ override previously failed the semantic runtime self-test; using the bundled runtime."
+              : "The configured STruC++ override has no qualified compiler-generated IEC function-block contract; using the bundled runtime.",
             { blocking: false }
           )
         );
@@ -367,7 +474,38 @@ async function resolveBundledStrucpp(
   const command = nativeCommand(bundledPath, dirname(bundledPath));
   const version = await runVersion(command, diagnostics);
   if (!validateTestedVersion(version, diagnostics)) return undefined;
-  return { command, version: testedStrucppVersion };
+  const contract = await resolveStandardFunctionBlockContracts(command, diagnostics);
+  if (!contract) return undefined;
+  return {
+    command,
+    version: testedStrucppVersion,
+    standardFunctionBlockContracts: contract
+  };
+}
+
+async function resolveStandardFunctionBlockContracts(
+  command: ResolvedCommand,
+  diagnostics: Diagnostic[]
+): Promise<ReturnType<typeof copyStandardFunctionBlockContracts> | undefined> {
+  const candidates = standardFunctionBlockContractCandidates({
+    executable: command.executable,
+    cwd: command.cwd,
+    packRoot: packRoot()
+  });
+  try {
+    const loaded = await loadStandardFunctionBlockContracts(candidates);
+    return loaded.contracts;
+  } catch (error) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "STRUCPP_STANDARD_FB_CONTRACT_INVALID",
+        `The pinned STruC++ compiler-generated IEC function-block contract could not be qualified: ${error instanceof Error ? error.message : String(error)}. Run TcGen installer Repair.`,
+        { sourceKind: "backend" }
+      )
+    );
+    return undefined;
+  }
 }
 
 async function resolveStrucppPath(explicitPath: string, diagnostics: Diagnostic[]): Promise<ResolvedCommand | undefined> {
@@ -493,6 +631,7 @@ export async function verifyRuntimeManifest(diagnostics: Diagnostic[]): Promise<
       "runtime/tcgen-st-test-mcp.exe",
       "backend/strucpp-win.exe",
       "backend/libs/iec-standard-fb.stlib",
+      "backend/libs/iec-function-block-contracts.json",
       "toolchain/mingw64/bin/g++.exe"
     ]);
     const seen = new Set<string>();
@@ -564,28 +703,18 @@ export async function verifyRuntimeManifest(diagnostics: Diagnostic[]): Promise<
     const runtimeIdentity = `${manifestIdentity}|${runtimeGeneration}`;
     if (verifiedRuntimeManifests.has(runtimeIdentity)) return true;
 
-    for (let offset = 0; offset < runtimeFiles.length; offset += concurrency) {
-      const failures = await Promise.all(
-        runtimeFiles.slice(offset, offset + concurrency).map(async file => {
-          try {
-            const actual = await sha256File(file.fullPath);
-            return actual.toLowerCase() === file.sha256.toLowerCase()
-              ? ""
-              : `runtime entry '${file.normalized}' failed SHA-256 verification`;
-          } catch {
-            return `runtime entry '${file.normalized}' is missing or unreadable`;
-          }
-        })
-      );
-      const failure = failures.find(Boolean);
-      if (failure) {
-        clearRuntimeManifestCache(root);
-        diagnostics.push(diagnostic("error", "RUNTIME_INTEGRITY_FAILED", `Virtual Tests ${failure}. Run TcGen installer Repair.`));
-        return false;
-      }
+    let integrityCheck = runtimeManifestChecks.get(runtimeIdentity);
+    if (!integrityCheck) {
+      integrityCheck = verifyRuntimeFileHashes(runtimeFiles, concurrency);
+      runtimeManifestChecks.set(runtimeIdentity, integrityCheck);
     }
-    clearRuntimeManifestCache(root);
-    verifiedRuntimeManifests.add(runtimeIdentity);
+    const hashFailure = await integrityCheck;
+    if (hashFailure) {
+      clearRuntimeManifestCache(root);
+      diagnostics.push(diagnostic("error", "RUNTIME_INTEGRITY_FAILED", `Virtual Tests ${hashFailure}. Run TcGen installer Repair.`));
+      return false;
+    }
+    rememberVerifiedRuntimeIdentity(root, runtimeIdentity);
     return true;
   } catch (error) {
     diagnostics.push(diagnostic("error", "RUNTIME_MANIFEST_INVALID", `Virtual Tests runtime manifest is invalid: ${error instanceof Error ? error.message : String(error)}. Run TcGen installer Repair.`));
@@ -598,6 +727,51 @@ function clearRuntimeManifestCache(root: string): void {
   for (const identity of verifiedRuntimeManifests) {
     if (identity.startsWith(prefix)) verifiedRuntimeManifests.delete(identity);
   }
+  for (const identity of runtimeManifestChecks.keys()) {
+    if (identity.startsWith(prefix)) runtimeManifestChecks.delete(identity);
+  }
+}
+
+function rememberVerifiedRuntimeIdentity(root: string, runtimeIdentity: string): void {
+  const prefix = `${root.toLowerCase()}|`;
+  for (const identity of verifiedRuntimeManifests) {
+    if (identity.startsWith(prefix) && identity !== runtimeIdentity) {
+      verifiedRuntimeManifests.delete(identity);
+    }
+  }
+  for (const identity of runtimeManifestChecks.keys()) {
+    if (identity.startsWith(prefix) && identity !== runtimeIdentity) {
+      runtimeManifestChecks.delete(identity);
+    }
+  }
+  verifiedRuntimeManifests.add(runtimeIdentity);
+}
+
+async function verifyRuntimeFileHashes(
+  runtimeFiles: ReadonlyArray<{
+    normalized: string;
+    sha256: string;
+    fullPath: string;
+  }>,
+  concurrency: number
+): Promise<string | undefined> {
+  for (let offset = 0; offset < runtimeFiles.length; offset += concurrency) {
+    const failures = await Promise.all(
+      runtimeFiles.slice(offset, offset + concurrency).map(async file => {
+        try {
+          const actual = await sha256File(file.fullPath);
+          return actual.toLowerCase() === file.sha256.toLowerCase()
+            ? ""
+            : `runtime entry '${file.normalized}' failed SHA-256 verification`;
+        } catch {
+          return `runtime entry '${file.normalized}' is missing or unreadable`;
+        }
+      })
+    );
+    const failure = failures.find(Boolean);
+    if (failure) return failure;
+  }
+  return undefined;
 }
 
 function normalizedManifestPath(value: string | undefined): string | undefined {
@@ -629,21 +803,24 @@ async function verifySemanticRuntime(
     resolve(gppExecutable).toLowerCase(),
     (packRoot() ?? "development").toLowerCase()
   ].join("|");
+  const generation = await semanticRuntimeGeneration(command);
 
-  let check = semanticRuntimeChecks.get(identity);
-  if (!check) {
-    check = runSemanticRuntimeSelfTest(command, gppExecutable);
-    semanticRuntimeChecks.set(identity, check);
+  let cached = semanticRuntimeChecks.get(identity);
+  if (!cached || cached.generation !== generation) {
+    cached = {
+      generation,
+      result: runSemanticRuntimeSelfTest(command, gppExecutable)
+    };
+    semanticRuntimeChecks.set(identity, cached);
   }
-  const result = await check;
-  semanticRuntimeChecks.delete(identity);
+  const result = await cached.result;
   if (result.available) return true;
 
   diagnostics.push(
     diagnostic(
       "error",
       "STRUCPP_SEMANTIC_SELF_TEST_FAILED",
-      `STruC++ could not compile and execute its pinned IEC standard-function-block and TwinCAT short-circuit self-test${result.detail ? `: ${result.detail}` : ""}. Run TcGen installer Repair.`,
+      `STruC++ could not compile and execute its pinned IEC standard-function-block, TwinCAT RS/SR named-pin, and short-circuit self-test${result.detail ? `: ${result.detail}` : ""}. Run TcGen installer Repair.`,
       { sourceKind: "backend" }
     )
   );
@@ -657,9 +834,19 @@ async function semanticRuntimeGeneration(command: ResolvedCommand): Promise<stri
   ]);
   if (command.cwd) {
     paths.add(join(command.cwd, "libs", "iec-standard-fb.stlib"));
+    paths.add(join(command.cwd, "libs", "iec-function-block-contracts.json"));
     paths.add(join(command.cwd, "libs", "sources", "iec-standard-fb", "library.json"));
+    paths.add(join(command.cwd, "libs", "sources", "iec-standard-fb", "bistable.st"));
     paths.add(join(command.cwd, "libs", "sources", "iec-standard-fb", "timer.st"));
   }
+
+  const contractGeneration = await standardFunctionBlockContractGeneration(
+    standardFunctionBlockContractCandidates({
+      executable: command.executable,
+      cwd: command.cwd,
+      packRoot: packRoot()
+    })
+  );
 
   const generation = [];
   for (const path of [...paths].sort((left, right) => left.localeCompare(right))) {
@@ -672,7 +859,9 @@ async function semanticRuntimeGeneration(command: ResolvedCommand): Promise<stri
       fileStat?.ctimeMs ?? -1
     ]);
   }
-  return createHash("sha256").update(JSON.stringify(generation), "utf8").digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify([generation, contractGeneration]), "utf8")
+    .digest("hex");
 }
 
 async function runSemanticRuntimeSelfTest(
@@ -697,15 +886,39 @@ async function runSemanticRuntimeSelfTest(
         "    xEvaluatedAnd : BOOL;",
         "    xSkippedOr : BOOL;",
         "    xEvaluatedOr : BOOL;",
+        "    xRsIec : BOOL;",
+        "    xRsTwinCat : BOOL;",
+        "    xSrIec : BOOL;",
+        "    xSrTwinCat : BOOL;",
+        "    xRsResetDominant : BOOL;",
+        "    xSrSetDominant : BOOL;",
         "END_VAR",
         "VAR",
         "    tonDelay : TON;",
+        "    rsIec : RS;",
+        "    rsTwinCat : RS;",
+        "    srIec : SR;",
+        "    srTwinCat : SR;",
+        "    rsResetDominant : RS;",
+        "    srSetDominant : SR;",
         "END_VAR",
         "METHOD PRIVATE TcGenTouch : BOOL",
         "nShortCircuitCalls := nShortCircuitCalls + 1;",
         "TcGenTouch := TRUE;",
         "END_METHOD",
         "tonDelay(IN := xEnable, PT := T#1ms);",
+        "rsIec(S := TRUE, R1 := FALSE);",
+        "rsTwinCat(SET := TRUE, RESET1 := FALSE);",
+        "srIec(S1 := TRUE, R := FALSE);",
+        "srTwinCat(SET1 := TRUE, RESET := FALSE);",
+        "rsResetDominant(SET := TRUE, RESET1 := TRUE);",
+        "srSetDominant(SET1 := TRUE, RESET := TRUE);",
+        "xRsIec := rsIec.Q1;",
+        "xRsTwinCat := rsTwinCat.Q1;",
+        "xSrIec := srIec.Q1;",
+        "xSrTwinCat := srTwinCat.Q1;",
+        "xRsResetDominant := rsResetDominant.Q1;",
+        "xSrSetDominant := srSetDominant.Q1;",
         "xDone := tonDelay.Q;",
         "xSkippedAnd := FALSE AND_THEN TcGenTouch();",
         "xEvaluatedAnd := TRUE AND_THEN TcGenTouch();",
@@ -725,6 +938,12 @@ async function runSemanticRuntimeSelfTest(
         "END_VAR",
         "dut(xEnable := TRUE);",
         "ASSERT_FALSE(dut.xDone);",
+        "ASSERT_TRUE(dut.xRsIec);",
+        "ASSERT_TRUE(dut.xRsTwinCat);",
+        "ASSERT_TRUE(dut.xSrIec);",
+        "ASSERT_TRUE(dut.xSrTwinCat);",
+        "ASSERT_FALSE(dut.xRsResetDominant);",
+        "ASSERT_TRUE(dut.xSrSetDominant);",
         "ASSERT_FALSE(dut.xSkippedAnd);",
         "ASSERT_TRUE(dut.xEvaluatedAnd);",
         "ASSERT_TRUE(dut.xSkippedOr);",
@@ -772,6 +991,33 @@ async function runSemanticRuntimeSelfTest(
 }
 
 async function verifyCpp17Compiler(executable: string, diagnostics: Diagnostic[]): Promise<boolean> {
+  const identity = resolve(executable).toLowerCase();
+  const executableStat = await tryStat(executable);
+  const generation = JSON.stringify([
+    executableStat?.size ?? -1,
+    executableStat?.mtimeMs ?? -1,
+    executableStat?.ctimeMs ?? -1,
+    (packRoot() ?? "development").toLowerCase()
+  ]);
+  let cached = cpp17CompilerChecks.get(identity);
+  if (!cached || cached.generation !== generation) {
+    cached = {
+      generation,
+      result: runCpp17CompilerSelfTest(executable)
+    };
+    cpp17CompilerChecks.set(identity, cached);
+  }
+  const result = await cached.result;
+  if (result.available) return true;
+  diagnostics.push(diagnostic(
+    "error",
+    result.code ?? "CPP17_SELF_TEST_ERROR",
+    result.detail ?? "The configured C++ compiler failed its C++17 self-test. Run TcGen installer Repair."
+  ));
+  return false;
+}
+
+async function runCpp17CompilerSelfTest(executable: string): Promise<Cpp17CompilerCheck> {
   const directory = await mkdtemp(join(tmpdir(), "tcgen-cpp17-check-"));
   const source = join(directory, "self-test.cpp");
   const output = join(directory, process.platform === "win32" ? "self-test.exe" : "self-test");
@@ -781,15 +1027,27 @@ async function verifyCpp17Compiler(executable: string, diagnostics: Diagnostic[]
     const compile = await spawnWithTimeout(compiler, ["-std=c++17", source, "-o", output], 15_000, executable);
     if (compile.exitCode !== 0) {
       const compilerDetail = sanitizeCompilerOutput(compile.stderr.trim(), directory) || "unknown compiler error";
-      diagnostics.push(diagnostic("error", "CPP17_COMPILE_FAILED", `The configured C++ compiler failed the C++17 self-test: ${compilerDetail}. Run TcGen installer Repair.`));
-      return false;
+      return {
+        available: false,
+        code: "CPP17_COMPILE_FAILED",
+        detail: `The configured C++ compiler failed the C++17 self-test: ${compilerDetail}. Run TcGen installer Repair.`
+      };
     }
     const run = await spawnWithTimeout(nativeCommand(output, directory), [], 5_000, executable);
     if (run.exitCode !== 0 || !run.stdout.includes("tcgen-cpp17-ok")) {
-      diagnostics.push(diagnostic("error", "CPP17_EXECUTION_FAILED", "The compiled C++17 self-test did not run successfully. Run TcGen installer Repair."));
-      return false;
+      return {
+        available: false,
+        code: "CPP17_EXECUTION_FAILED",
+        detail: "The compiled C++17 self-test did not run successfully. Run TcGen installer Repair."
+      };
     }
-    return true;
+    return { available: true };
+  } catch (error) {
+    return {
+      available: false,
+      code: "CPP17_SELF_TEST_ERROR",
+      detail: `The configured C++ compiler could not run its C++17 self-test: ${sanitizeCompilerOutput(error instanceof Error ? error.message : String(error), directory)}. Run TcGen installer Repair.`
+    };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -891,7 +1149,8 @@ function spawnWithTimeout(
   timeoutMs: number,
   gppExecutable?: string,
   semanticTempRoot?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onOutputLine?: (line: string) => void
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut?: boolean; cancelled?: boolean }> {
   return new Promise(resolveResult => {
     let settled = false;
@@ -904,6 +1163,8 @@ function spawnWithTimeout(
     });
     let stdout = "";
     let stderr = "";
+    let stdoutLineBuffer = "";
+    let stderrLineBuffer = "";
     let timer: NodeJS.Timeout | undefined;
     let childClosedResolve: (() => void) | undefined;
     const childClosed = new Promise<void>(resolve => {
@@ -944,10 +1205,14 @@ function spawnWithTimeout(
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) onAbort();
     child.stdout?.on("data", chunk => {
-      stdout += chunk.toString();
+      const text = chunk.toString();
+      stdout += text;
+      stdoutLineBuffer = emitCompleteLines(stdoutLineBuffer + text, onOutputLine);
     });
     child.stderr?.on("data", chunk => {
-      stderr += chunk.toString();
+      const text = chunk.toString();
+      stderr += text;
+      stderrLineBuffer = emitCompleteLines(stderrLineBuffer + text, onOutputLine);
     });
     child.on("error", error => {
       childClosedResolve?.();
@@ -957,9 +1222,24 @@ function spawnWithTimeout(
     child.on("close", code => {
       childClosedResolve?.();
       if (terminationReason) return;
+      if (stdoutLineBuffer) emitCompleteLines(`${stdoutLineBuffer}\n`, onOutputLine);
+      if (stderrLineBuffer) emitCompleteLines(`${stderrLineBuffer}\n`, onOutputLine);
       finish({ stdout, stderr, exitCode: code });
     });
   });
+}
+
+function emitCompleteLines(value: string, observer: ((line: string) => void) | undefined): string {
+  const lines = value.split(/\r?\n/);
+  const remainder = lines.pop() ?? "";
+  for (const line of lines) {
+    try {
+      observer?.(line);
+    } catch {
+      // Streaming progress is advisory and must never affect the semantic run.
+    }
+  }
+  return remainder;
 }
 
 async function killProcessTreeAndWait(pid: number | undefined): Promise<void> {
@@ -1066,6 +1346,16 @@ function parseTests(text: string): BackendRunResult["tests"] {
     }
   }
   return tests;
+}
+
+function parseTestResultLine(line: string): BackendRunResult["tests"][number] | undefined {
+  const pass = /^\s*(?:PASS:|\[PASS\])\s*(.+?)\s*$/i.exec(line);
+  if (pass) return { name: pass[1], status: "passed" };
+  const fail = /^\s*(?:FAIL:|\[FAIL\])\s*(.+?)\s*$/i.exec(line);
+  if (fail) return { name: fail[1], status: "failed" };
+  const skipped = /^\s*(?:SKIP:|\[SKIP\]|\[SKIPPED\])\s*(.+?)\s*$/i.exec(line);
+  if (skipped) return { name: skipped[1], status: "skipped" };
+  return undefined;
 }
 
 async function fileExists(path: string): Promise<boolean> {

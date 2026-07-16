@@ -30,16 +30,22 @@ describe("MCP tool metadata", () => {
       expect(metadata.capabilities).toContain("frameworkTargetCoverageV1");
       expect(metadata.capabilities).toContain("frameworkMultiScanV1");
       expect(metadata.capabilities).toContain("twinCatShortCircuitOperatorsV1");
+      expect(metadata.capabilities).toContain("twinCatBistableAliasesV1");
+      expect(metadata.capabilities).toContain("frameworkAssertionLedgerV1");
+      expect(metadata.capabilities).toContain("frameworkAssertionProgressV1");
       if (tool.name === "tcgen_st_test_run") {
         expect(metadata.capabilities).toContain("candidateCompilePreflightV1");
       }
-      expect(metadata.serverVersion).toBe("0.8.0");
+      expect(metadata.serverVersion).toBe("0.8.1");
       expect(metadata.evidencePaths).toEqual(
         expect.arrayContaining([
           "structuredContent.testMode",
           "structuredContent.coveredExecutableObjects",
           "structuredContent.frameworkTargetCoverage",
+          "structuredContent.assertionLedger",
           "structuredContent.backend.executionAttempted",
+          "structuredContent.backend.standardFunctionBlockContracts",
+          "structuredContent.backend.standardFunctionBlockContractQualified",
           "structuredContent.generatedTestNames",
           "structuredContent.subject.candidateSha256",
           "structuredContent.subject.dependencyBundleSha256"

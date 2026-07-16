@@ -25,7 +25,15 @@ export function sanitizeCompilerDiagnostics(diagnostics: Diagnostic[], workspace
     message: sanitizeCompilerOutput(item.message, workspace),
     ...(item.suggestion === undefined
       ? {}
-      : { suggestion: sanitizeCompilerOutput(item.suggestion, workspace) })
+      : { suggestion: sanitizeCompilerOutput(item.suggestion, workspace) }),
+    ...(item.technicalEvidence === undefined
+      ? {}
+      : {
+          technicalEvidence: {
+            ...item.technicalEvidence,
+            content: sanitizeCompilerOutput(item.technicalEvidence.content, workspace)
+          }
+        })
   }));
 }
 
@@ -41,15 +49,20 @@ export function structuredCompilerOutputDiagnostics(
   const label = category === "COMPILE" ? "compile" : category === "TEST" ? "test failure" : "runtime";
   const diagnostics: Diagnostic[] = [];
   for (const channel of ["stderr", "stdout"] as const) {
-    const sanitized = truncateDiagnosticText(sanitizeCompilerOutput(output[channel], workspace).trim());
-    if (!sanitized) continue;
-    const provenance = compilerDiagnosticProvenance(verdict, sanitized, sourceMap);
-    const compatibilityGap = strucppTwinCatCompatibilityGap(verdict, sanitized);
+    const completeSanitized = sanitizeCompilerOutput(output[channel], workspace).trim();
+    if (!completeSanitized) continue;
+    const displaySanitized = truncateDiagnosticText(completeSanitized);
+    const provenance = compilerDiagnosticProvenance(verdict, completeSanitized, sourceMap);
+    const compatibilityGap = strucppTwinCatCompatibilityGap(verdict, completeSanitized);
+    const generatedArtifacts = generatedCppArtifacts(completeSanitized);
+    const hasGeneratedCppEvidence = generatedArtifacts.length > 0;
     diagnostics.push(
       diagnostic(
         "error",
         compatibilityGap?.code ?? `STRUCPP_${category}_${channel.toUpperCase()}`,
-        `STruC++ ${label} ${channel}:\n${sanitized}`,
+        hasGeneratedCppEvidence
+          ? `STruC++ ${label} ${channel} contains generated C++ diagnostics. The sanitized raw compiler output is retained under technicalEvidence with explicit generated-artifact provenance.`
+          : `STruC++ ${label} ${channel}:\n${displaySanitized}`,
         {
           // These constructs are valid in the TcGen/TwinCAT source contract.
           // Treating the parser limitation as candidate provenance would send
@@ -59,7 +72,19 @@ export function structuredCompilerOutputDiagnostics(
           sourceKind: compatibilityGap ? "backend" : provenance.sourceKind,
           ...(provenance.original ? { original: provenance.original } : {}),
           ...(provenance.object ? { object: provenance.object } : {}),
-          ...(compatibilityGap ? { suggestion: compatibilityGap.suggestion } : {})
+          ...(compatibilityGap ? { suggestion: compatibilityGap.suggestion } : {}),
+          ...(compatibilityGap ? { detail: compatibilityGap.detail } : {}),
+          ...(hasGeneratedCppEvidence
+            ? {
+                technicalEvidence: {
+                  kind: "compiler_output" as const,
+                  channel,
+                  content: completeSanitized,
+                  sourceKind: "generated_cpp" as const,
+                  generatedArtifacts
+                }
+              }
+            : {})
         }
       )
     );
@@ -67,10 +92,18 @@ export function structuredCompilerOutputDiagnostics(
   return diagnostics;
 }
 
+function generatedCppArtifacts(value: string): string[] {
+  const artifacts = new Set<string>();
+  for (const match of value.matchAll(/(?:^|[\\/\s:<])(?<name>generated\.cpp|test_main\.cpp)(?=[:\s>]|$)/gim)) {
+    if (match.groups?.name) artifacts.add(match.groups.name.toLowerCase());
+  }
+  return [...artifacts].sort();
+}
+
 export function strucppTwinCatCompatibilityGap(
   verdict: SemanticVerdict,
   sanitizedOutput: string
-): { code: string; suggestion: string } | undefined {
+): { code: string; suggestion: string; detail: "backend_incompatibility" } | undefined {
   if (verdict !== "compile_error") return undefined;
   if (
     /Expected\s+`END_GET`,\s+found\s+`VAR`/i.test(sanitizedOutput)
@@ -78,6 +111,7 @@ export function strucppTwinCatCompatibilityGap(
   ) {
     return {
       code: "STRUCPP_TWINCAT_PROPERTY_ACCESSOR_LOCALS_UNSUPPORTED",
+      detail: "backend_incompatibility",
       suggestion:
         "Update the pinned STruC++ runtime with native PROPERTY accessor-local declaration support; do not rewrite valid TwinCAT production ST to avoid this compiler limitation."
     };
@@ -88,11 +122,32 @@ export function strucppTwinCatCompatibilityGap(
   ) {
     return {
       code: "STRUCPP_TWINCAT_GROUPED_QUALIFIED_CASE_LABELS_UNSUPPORTED",
+      detail: "backend_incompatibility",
       suggestion:
         "Update the pinned STruC++ runtime with native grouped qualified CASE-label support; do not rewrite valid TwinCAT production ST to avoid this compiler limitation."
     };
   }
+  if (bistableNamedPinContractMismatch(sanitizedOutput)) {
+    return {
+      code: "STRUCPP_TWINCAT_BISTABLE_NAMED_PIN_CONTRACT_MISMATCH",
+      detail: "backend_incompatibility",
+      suggestion:
+        "The pinned semantic runtime rejected an RS/SR named input admitted by its qualified compiler-generated IEC function-block contract. Repair or update the pinned runtime; do not rewrite valid TwinCAT production ST."
+    };
+  }
   return undefined;
+}
+
+function bistableNamedPinContractMismatch(value: string): boolean {
+  const mentionsAdmittedBlockPin =
+    (/\bRS\b/i.test(value) && /\b(?:SET|RESET1)\b/i.test(value))
+    || (/\bSR\b/i.test(value) && /\b(?:SET1|RESET)\b/i.test(value));
+  const rejectsNamedMember =
+    /\b(?:no|unknown|invalid|unexpected|missing)\b[^\r\n]{0,120}\b(?:member|field|input|pin|parameter|argument)\b/i.test(value)
+    || /\b(?:member|field|input|pin|parameter|argument)\b[^\r\n]{0,120}\b(?:not found|not declared|unknown|invalid|does not exist)\b/i.test(value)
+    || /\bhas no member(?: named)?\b/i.test(value)
+    || /\bnot a member of\b/i.test(value);
+  return mentionsAdmittedBlockPin && rejectsNamedMember;
 }
 
 export function compilerDiagnosticSourceKind(
