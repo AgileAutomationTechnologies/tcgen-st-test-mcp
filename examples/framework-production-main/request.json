@@ -16,7 +16,7 @@
     },
     {
       "path": "test.st",
-      "content": "FUNCTION_BLOCK FB_Test_ProductionMain EXTENDS FB_TestCaseBase\nVAR\n    fbCut : FB_MainCounter;\nEND_VAR\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'production MAIN remains compiled';\n    _eExecuteState := eTestState_Running;\n    fbCut();\n    m_xAssertEqualDint(1, fbCut.q_nCycles, 'candidate FB executes while MAIN remains compiled');\n    _eExecuteState := eTestState_Passed;\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
+      "content": "FUNCTION_BLOCK FB_Test_ProductionMain EXTENDS FB_TestCaseBase\nVAR\n    fbCut : FB_MainCounter;\nEND_VAR\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'production MAIN remains compiled';\n    _eState := eTestState_Running;\n    _eExecuteState := eTestState_Running;\n    fbCut();\n    m_xAssertEqualDint(1, fbCut.q_nCycles, 'candidate FB executes while MAIN remains compiled');\n    _eState := eTestState_Passed;\n    _eExecuteState := eTestState_Passed;\n    _xPhaseBusy := FALSE;\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
     }
   ],
   "frameworkTest": {
@@ -28,7 +28,7 @@
         "testFunctionBlock": "FB_Test_ProductionMain",
         "productionTarget": "FB_MainCounter",
         "testSourcePath": "test.st",
-        "testSourceSha256": "eda973ca14ddd2ada4de75ca44093fcfaa83245a607ab70294e70d1e2cd82267"
+        "testSourceSha256": "e11fd89a00f3a4885dd3867017fdd9600baf1cdff8054f3c3ab4246890ae6fee"
       }
     ],
     "maxScans": 20

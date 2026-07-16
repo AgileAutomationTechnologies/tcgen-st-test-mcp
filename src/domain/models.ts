@@ -24,6 +24,17 @@ export type SemanticVerdict =
   | "timeout";
 export type SemanticTestMode = "generated" | "framework";
 export type FrameworkExecutionContract = "tcgen-framework-multiscan-v1";
+export type SemanticArtifactRole = "framework_st" | "execution_adapter";
+
+export interface SemanticArtifactIdentity {
+  artifactId: string;
+  role: SemanticArtifactRole;
+  path: string;
+  sha256: string;
+  byteLength: number;
+  primary: boolean;
+  visibility: "review" | "technical";
+}
 
 export interface SourceSpan {
   path: string;
@@ -279,6 +290,7 @@ export interface SemanticTestReport {
   frameworkTargetCoverage: FrameworkTargetCoverage[];
   assertions: FrameworkAssertionEvidence[];
   assertionLedger: FrameworkAssertionLedger;
+  artifactIdentities?: SemanticArtifactIdentity[];
   generatedTestNames: string[];
   subject: SemanticTestSubject & {
     candidateSha256: string;

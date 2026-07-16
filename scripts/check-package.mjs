@@ -16,6 +16,7 @@ const requiredPaths = [
   "schemas/dependency-bundle-hash-vectors.json",
   "schemas/normalization-report.schema.json",
   "schemas/semantic-report.schema.json",
+  "scripts/export-semantic-report-contract.mjs",
   "LICENSE",
   "THIRD_PARTY_NOTICES.md"
 ];

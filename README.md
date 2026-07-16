@@ -144,12 +144,20 @@ Generation keeps the submitted TwinCAT framework ST byte-for-byte in
 `testFile` and `frameworkTestFiles`. The separately generated STruC++ execution
 adapter is returned in `generatedTestFile`; `hashes.testSource` identifies that
 adapter, while each framework source retains its own trusted mapping hash.
+Both generate and run responses also expose `artifactIdentities[]`. Canonical
+submitted sources use `role: "framework_st"`, `visibility: "review"`, while the
+separate adapter uses `role: "execution_adapter"`,
+`visibility: "technical"`. Each identity includes a stable artifact ID, path,
+content SHA-256, UTF-8 byte length, and primary flag; consumers must select the
+reviewable source by role rather than by the legacy field name.
 Semantic report v2 publishes the verified identities and structural evidence in
 `frameworkTargetCoverage[]` (`assertionCount`, `targetReferenceCount`, and
 `verified`). Generate and run tool metadata advertise the
 `frameworkTargetCoverageV1`, `frameworkMultiScanV1`,
 `twinCatShortCircuitOperatorsV1`, `twinCatBistableAliasesV1`,
-`frameworkAssertionLedgerV1`, `frameworkAssertionProgressV1`, and (on
+`frameworkAssertionLedgerV1`, `frameworkAssertionProgressV1`,
+`frameworkLifecycleV1`, `frameworkArtifactRolesV1`,
+`frameworkAssertionRunningProgressV1`, and (on
 `tcgen_st_test_run`)
 `candidateCompilePreflightV1` capabilities. The candidate-preflight capability
 means the trusted scheduler can compile the exact candidate and dependency
@@ -163,9 +171,13 @@ then calls `m_xExecute(FALSE)` once per offline PLC scan while `m_xIsBusy()`
 remains true. The offline task interval is deterministic: each resumed scan is
 preceded by `ADVANCE_TIME(1000000)` (one millisecond), allowing IEC timers to
 progress without introducing STruC++ syntax into the submitted Beckhoff ST.
-Synchronous tests that finish on the initial call remain valid. A
-multi-scan test must advance work on FALSE-trigger calls; `m_xIsBusy()` reports
-state and must not advance the test as a side effect.
+Synchronous tests that finish on the initial call remain valid. Successful
+terminal paths set both `_eState` and `_eExecuteState` to Passed and clear
+`_xPhaseBusy`. A multi-scan test declares `udiStep : UDINT`, advances through
+`CASE udiStep OF` on FALSE-trigger calls only while both inherited states remain
+Running, and clears `_xPhaseBusy` on success and failure. Its `m_xIsBusy()`
+implementation is the side-effect-free `_xPhaseBusy` observer. The private
+adapter independently asserts the final `ST_TestCaseResult` states and counters.
 
 The additive `assertions[]` field identifies every meaningful submitted
 `m_xAssert*` call by source path, source SHA-256, one-based line, mapped target,
@@ -180,6 +192,9 @@ The adapter binds runtime rows to stable assertion IDs rather than treating the
 human-readable assertion message as identity. Reached rows include start and
 completion timestamps, and unreached rows are explicit rather than inferred as
 passing.
+Request-bound progress emits `queued`, `running`, and `completed` checkpoint
+phases with the canonical Framework source line so a client can highlight the
+currently executing assertion without displaying the execution adapter.
 `assertionLedger` reports the stable ledger hash, completeness, and counts while
 the legacy first-error result remains available. Report v1 remains unchanged.
 
@@ -250,7 +265,7 @@ requires a real external Node executable through `TCGEN_ST_NODE_PATH` or PATH;
 the packaged MCP refuses to recursively use itself as Node. Prefer native
 `strucpp-win.exe` in product installations, which needs no external Node.
 
-The v0.8.1 Windows validation target is the AgileAutomationTechnologies STruC++
+The v0.8.2 Windows validation target is the AgileAutomationTechnologies STruC++
 downstream release at commit `eca6ff87dc28b804298944ed4ee6e633afad368d`,
 based on upstream STruC++ `0.5.13` plus the qualified TcGen downstream patch set,
 identified as `0.5.13-tcgen.3`.
@@ -266,6 +281,18 @@ npm run fixtures
 npm run smoke:mcp
 npm run pack:check
 ```
+
+Release automation can export a deterministic, complete Framework assertion
+report contract after building the package:
+
+```powershell
+npm run export:semantic-report-contract -- C:\temp\mcp-0.8.2-framework-assertion-report.json
+```
+
+The exported JSON contains the current `mcpVersion` and intentionally omits
+`mcpCommit`. The release orchestrator must inject the immutable commit from the
+published MCP revision rather than asking the exporter to infer it from a
+possibly dirty working tree.
 
 Native verification expects:
 

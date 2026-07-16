@@ -328,6 +328,7 @@ function emitWrapperTests(
     lines.push(`TEST '${escapeString(captureName)}'`);
     emitFreshFrameworkExecution(lines, testBlock.name, maxScans, "capture");
     lines.push("ASSERT_TRUE(GVL_TcGenAssertionLedger__diCount > 0);");
+    emitFinalFrameworkResultAssertions(lines);
     lines.push("END_TEST", "");
 
     for (const assertion of blockAssertions) {
@@ -346,6 +347,7 @@ function emitWrapperTests(
       lines.push(
         `ASSERT_TRUE(TcGenAssertionLedgerPassed('${escapeString(assertion.assertionId)}'), 'TCFRAMEWORK_ASSERTION_PASSED:${escapeString(assertion.checkpointId ?? assertion.assertionId)}');`
       );
+      emitFinalFrameworkResultAssertions(lines);
       lines.push("END_TEST", "");
     }
   }
@@ -389,6 +391,14 @@ function emitFreshFrameworkExecution(
   lines.push(`result := ${instance}.m_stGetResult();`);
   lines.push("ASSERT_TRUE(tcframework_execute_complete);");
   lines.push("ASSERT_FALSE(GVL_TcGenAssertionLedger__xOverflow);");
+}
+
+function emitFinalFrameworkResultAssertions(lines: string[]): void {
+  lines.push("ASSERT_EQ(result.eState, eTestState_Passed);");
+  lines.push("ASSERT_EQ(result.eExecuteState, eTestState_Passed);");
+  lines.push("ASSERT_TRUE(result.udiAssertions > 0);");
+  lines.push("ASSERT_EQ(result.udiFailed, 0);");
+  lines.push("ASSERT_EQ(result.udiPassed, result.udiAssertions);");
 }
 
 function frameworkWrapperName(testBlockName: string): string {

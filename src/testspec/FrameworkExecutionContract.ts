@@ -74,8 +74,24 @@ export function validateFrameworkExecutionContract(
       continue;
     }
 
-    diagnostics.push(...validateExecuteMethod(test, execute));
+    const execution = validateExecuteMethod(test, execute, objectSource);
+    diagnostics.push(...execution.diagnostics);
+    if (execution.multiScan && !busyObserver) {
+      diagnostics.push(
+        diagnostic(
+          "error",
+          "TCFRAMEWORK_BUSY_OBSERVER_REQUIRED",
+          `Multi-scan Framework test '${test.name}' must expose m_xIsBusy as a side-effect-free observer of _xPhaseBusy.`,
+          {
+            sourceKind: "generated_test_harness",
+            object: test.qualifiedName,
+            original: { ...test.sourceSpan }
+          }
+        )
+      );
+    }
     if (busyObserver) diagnostics.push(...validateBusyObserver(test, busyObserver));
+    diagnostics.push(...validateBusyOwnership(test, execute, allObjects));
   }
   return diagnostics;
 }
@@ -85,8 +101,8 @@ function validateBusyObserver(test: TcGenObject, busyObserver: TcGenObject): Dia
   const stateAssignments = [...code.matchAll(/\b([A-Za-z_][A-Za-z0-9_.]*)\s*:=/gi)]
     .map(match => match[1])
     .filter(target => target.toLowerCase() !== "m_xisbusy");
-  if (stateAssignments.length === 0) return [];
-  return [
+  const diagnostics: Diagnostic[] = [];
+  if (stateAssignments.length > 0) diagnostics.push(
     diagnostic(
       "error",
       "TCFRAMEWORK_BUSY_OBSERVER_SIDE_EFFECT",
@@ -97,12 +113,31 @@ function validateBusyObserver(test: TcGenObject, busyObserver: TcGenObject): Dia
         original: { ...busyObserver.sourceSpan }
       }
     )
-  ];
+  );
+  if (!/\bm_xIsBusy\s*:=\s*_xPhaseBusy\s*;/i.test(code)) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "TCFRAMEWORK_BUSY_OBSERVER_INVALID",
+        `Framework test '${test.name}' must implement m_xIsBusy as the side-effect-free expression 'm_xIsBusy := _xPhaseBusy;'.`,
+        {
+          sourceKind: "generated_test_harness",
+          object: busyObserver.qualifiedName,
+          original: { ...busyObserver.sourceSpan }
+        }
+      )
+    );
+  }
+  return diagnostics;
 }
 
-function validateExecuteMethod(test: TcGenObject, execute: TcGenObject): Diagnostic[] {
+function validateExecuteMethod(
+  test: TcGenObject,
+  execute: TcGenObject,
+  testSource: string
+): { diagnostics: Diagnostic[]; multiScan: boolean } {
   const diagnostics: Diagnostic[] = [];
-  const code = stripTrivia(`${execute.declarationText}\n${execute.implementationText}`);
+  const code = stripTrivia(`${testSource}\n${execute.declarationText}\n${execute.implementationText}`);
   const options = {
     sourceKind: "generated_test_harness" as const,
     object: execute.qualifiedName,
@@ -129,15 +164,68 @@ function validateExecuteMethod(test: TcGenObject, execute: TcGenObject): Diagnos
         options
       )
     );
-    return diagnostics;
+    return { diagnostics, multiScan: false };
   }
 
   const startsBusyPhase = /\b_xPhaseBusy\s*:=\s*TRUE\b/i.test(triggerFlow.trueBranch);
-  if (!startsBusyPhase || triggerBranchCompletesSynchronously(triggerFlow.trueBranch)) {
-    return diagnostics;
+  const multiScan = startsBusyPhase && !triggerBranchCompletesSynchronously(triggerFlow.trueBranch);
+  if (!multiScan) {
+    validateSuccessfulTerminalState(test, triggerFlow.trueBranch, options, diagnostics);
+    return { diagnostics, multiScan: false };
   }
 
   const reachableResumeSource = reachableFalseTriggerSource(triggerFlow);
+  if (!/\budiStep\s*:\s*UDINT\b/i.test(code)) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "TCFRAMEWORK_MULTISCAN_STEP_REQUIRED",
+        `Multi-scan Framework test '${test.name}' must declare 'udiStep : UDINT' as its deterministic execution step.`,
+        options
+      )
+    );
+  }
+  if (!/\budiStep\s*:=\s*(?:0|1)\s*;/i.test(triggerFlow.trueBranch)) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "TCFRAMEWORK_MULTISCAN_STEP_INITIALIZATION_REQUIRED",
+        `Multi-scan Framework test '${test.name}' must initialize udiStep in the TRUE-trigger branch.`,
+        options
+      )
+    );
+  }
+  if (!/\bCASE\s+udiStep\s+OF\b/i.test(reachableResumeSource)) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "TCFRAMEWORK_MULTISCAN_CASE_REQUIRED",
+        `Multi-scan Framework test '${test.name}' must advance through 'CASE udiStep OF' in its FALSE-trigger path.`,
+        options
+      )
+    );
+  }
+  if (!hasStateAssignment(triggerFlow.trueBranch, "_eState", "Running")
+    || !hasStateAssignment(triggerFlow.trueBranch, "_eExecuteState", "Running")) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "TCFRAMEWORK_MULTISCAN_RUNNING_STATE_REQUIRED",
+        `Multi-scan Framework test '${test.name}' must set both _eState and _eExecuteState to eTestState_Running before setting _xPhaseBusy.`,
+        options
+      )
+    );
+  }
+  if (!hasDualRunningGuard(reachableResumeSource)) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "TCFRAMEWORK_MULTISCAN_RUNNING_GUARD_REQUIRED",
+        `Multi-scan Framework test '${test.name}' may resume only while both _eState and _eExecuteState remain eTestState_Running.`,
+        options
+      )
+    );
+  }
   if (!containsMeaningfulResumeStatement(reachableResumeSource)) {
     diagnostics.push(
       diagnostic(
@@ -158,7 +246,91 @@ function validateExecuteMethod(test: TcGenObject, execute: TcGenObject): Diagnos
       )
     );
   }
-  return diagnostics;
+  const busyClearCount = (
+    removeStaticallyFalseBlocks(reachableResumeSource).match(/\b_xPhaseBusy\s*:=\s*FALSE\b/gi) ?? []
+  ).length;
+  if (busyClearCount < 2) {
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "TCFRAMEWORK_MULTISCAN_FAILURE_TERMINATION_REQUIRED",
+        `Multi-scan Framework test '${test.name}' must clear _xPhaseBusy when either inherited state leaves Running as well as on its successful terminal path.`,
+        options
+      )
+    );
+  }
+  validateSuccessfulTerminalState(test, reachableResumeSource, options, diagnostics);
+  return { diagnostics, multiScan: true };
+}
+
+function validateSuccessfulTerminalState(
+  test: TcGenObject,
+  terminalSource: string,
+  options: {
+    sourceKind: "generated_test_harness";
+    object: string;
+    original: TcGenObject["sourceSpan"];
+  },
+  diagnostics: Diagnostic[]
+): void {
+  if (hasStateAssignment(terminalSource, "_eState", "Passed")
+    && hasStateAssignment(terminalSource, "_eExecuteState", "Passed")) {
+    if (/\b_xPhaseBusy\s*:=\s*FALSE\b/i.test(removeStaticallyFalseBlocks(terminalSource))) {
+      return;
+    }
+    diagnostics.push(
+      diagnostic(
+        "error",
+        "TCFRAMEWORK_TERMINAL_BUSY_CLEAR_REQUIRED",
+        `Framework test '${test.name}' must clear _xPhaseBusy on its successful terminal path.`,
+        options
+      )
+    );
+    return;
+  }
+  diagnostics.push(
+    diagnostic(
+      "error",
+      "TCFRAMEWORK_TERMINAL_STATES_REQUIRED",
+      `Framework test '${test.name}' must set both _eState and _eExecuteState to eTestState_Passed on its successful terminal path.`,
+      options
+    )
+  );
+}
+
+function hasStateAssignment(source: string, target: string, state: "Running" | "Passed"): boolean {
+  return new RegExp(`\\b${target}\\s*:=\\s*eTestState_${state}\\b`, "i").test(
+    removeStaticallyFalseBlocks(source)
+  );
+}
+
+function hasDualRunningGuard(source: string): boolean {
+  return /\b_eState\s*=\s*eTestState_Running\b/i.test(source)
+    && /\b_eExecuteState\s*=\s*eTestState_Running\b/i.test(source);
+}
+
+function validateBusyOwnership(
+  test: TcGenObject,
+  execute: TcGenObject,
+  allObjects: readonly TcGenObject[]
+): Diagnostic[] {
+  const otherAssignments = allObjects.filter(object =>
+    object.ownerName?.toLowerCase() === test.qualifiedName.toLowerCase()
+    && object.id !== execute.id
+    && object.kind !== "functionBlock"
+    && /\b_xPhaseBusy\s*:=/i.test(stripTrivia(object.implementationText))
+  );
+  if (otherAssignments.length === 0) return [];
+  return otherAssignments.map(object => diagnostic(
+    "error",
+    "TCFRAMEWORK_PHASE_BUSY_OWNERSHIP",
+    `Framework test '${test.name}' may assign _xPhaseBusy only inside m_xExecute; '${object.qualifiedName}' also assigns it.`,
+    {
+      sourceKind: "generated_test_harness",
+      object: object.qualifiedName,
+      original: { ...object.sourceSpan }
+    }
+  ));
 }
 
 type TriggerFlow = {
@@ -246,7 +418,7 @@ function topLevelBusyAssignments(value: string): boolean[] {
 function reachableFalseTriggerSource(flow: TriggerFlow): string {
   const reachableBranches = flow.falseBranches
     .filter(branch => branch.condition === "" || conditionCanRunWhenTriggerIsFalse(branch.condition ?? ""))
-    .map(branch => branch.body);
+    .map(branch => `${branch.condition ?? ""}\n${branch.body}`);
   return [...reachableBranches, flow.afterBlock].join("\n");
 }
 

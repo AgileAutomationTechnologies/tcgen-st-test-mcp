@@ -140,6 +140,12 @@ describe("MCP request-bound progress", () => {
     const backend = vi.spyOn(StrucppBackend.prototype, "run").mockImplementation(
       async (_sources, _test, options) => {
         options.onTestResult?.({
+          name: generated.generatedTestNames[0],
+          status: "passed",
+          startedAt: "2026-07-15T09:59:59.000Z",
+          completedAt: "2026-07-15T10:00:00.000Z"
+        });
+        options.onTestResult?.({
           name: first.checkpointTestName,
           status: "passed",
           startedAt: "2026-07-15T10:00:00.000Z",
@@ -200,6 +206,21 @@ describe("MCP request-bound progress", () => {
             status: "passed",
             startedAt: "2026-07-15T10:00:00.000Z",
             completedAt: "2026-07-15T10:00:01.000Z"
+          })
+        })
+      }));
+      expect(notifications).toContainEqual(expect.objectContaining({
+        method: "notifications/progress",
+        params: expect.objectContaining({
+          progressToken: "live-framework-token",
+          tcgen: expect.objectContaining({
+            phase: "running",
+            assertionId: first.assertionId,
+            checkpointId: first.checkpointId,
+            sourceLine: first.sourceLine,
+            reached: false,
+            status: "running",
+            startedAt: expect.any(String)
           })
         })
       }));

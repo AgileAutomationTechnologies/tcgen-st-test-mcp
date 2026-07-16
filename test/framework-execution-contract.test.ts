@@ -26,8 +26,8 @@ describe("Framework multi-scan execution contract", () => {
     const request = loadRequest("framework-limit-counter");
     const source = frameworkSource(request);
     source.content = source.content.replace(
-      "    nScan : DINT;",
-      "    nScan : DINT;\n    eStep : (eInit, eRunning, eDone) := eInit;"
+      "    udiStep : UDINT;",
+      "    udiStep : UDINT;\n    eStep : (eInit, eRunning, eDone) := eInit;"
     );
     request.frameworkTest!.targetMappings[0].testSourceSha256 = sha256(source.content);
 
@@ -128,6 +128,71 @@ describe("Framework multi-scan execution contract", () => {
     expect(codes(result)).not.toContain("TCFRAMEWORK_MULTISCAN_RESUME_REQUIRED");
     expect(codes(result)).not.toContain("TCFRAMEWORK_MULTISCAN_TERMINATION_REQUIRED");
     expect(result.generatedTestFile.content.length).toBeGreaterThan(0);
+  });
+
+  it("requires a CASE step machine, both running/terminal states, and failure cleanup for multi-scan tests", async () => {
+    const mutations: Array<[string, string, string]> = [
+      ["step", "    udiStep : UDINT;", "    diStep : DINT;"],
+      ["case", "CASE udiStep OF", "CASE udiOther OF"],
+      ["running", "    _eState := eTestState_Running;", ""],
+      ["terminal", "                _eState := eTestState_Passed;", ""],
+      ["failure-cleanup", "    ELSE\n        _xPhaseBusy := FALSE;\n    END_IF", "    END_IF"]
+    ];
+    const expectedCodes: Record<string, string> = {
+      step: "TCFRAMEWORK_MULTISCAN_STEP_REQUIRED",
+      case: "TCFRAMEWORK_MULTISCAN_CASE_REQUIRED",
+      running: "TCFRAMEWORK_MULTISCAN_RUNNING_STATE_REQUIRED",
+      terminal: "TCFRAMEWORK_TERMINAL_STATES_REQUIRED",
+      "failure-cleanup": "TCFRAMEWORK_MULTISCAN_FAILURE_TERMINATION_REQUIRED"
+    };
+
+    for (const [name, from, to] of mutations) {
+      const request = loadRequest("framework-limit-counter");
+      const source = frameworkSource(request);
+      source.content = source.content.replace(from, to);
+      request.frameworkTest!.targetMappings[0].testSourceSha256 = sha256(source.content);
+      const result = await generate(request);
+      expect(codes(result), name).toContain(expectedCodes[name]);
+      expect(result.generatedTestFile.content, name).toBe("");
+    }
+  });
+
+  it("requires one pure busy observer and keeps busy-state ownership inside m_xExecute", async () => {
+    const missing = loadRequest("framework-limit-counter");
+    const missingSource = frameworkSource(missing);
+    missingSource.content = missingSource.content.replace(
+      /\nMETHOD PUBLIC m_xIsBusy : BOOL\nm_xIsBusy := _xPhaseBusy;\nEND_METHOD/,
+      ""
+    );
+    missing.frameworkTest!.targetMappings[0].testSourceSha256 = sha256(missingSource.content);
+    expect(codes(await generate(missing))).toContain("TCFRAMEWORK_BUSY_OBSERVER_REQUIRED");
+
+    const impure = loadRequest("framework-limit-counter");
+    const impureSource = frameworkSource(impure);
+    impureSource.content = impureSource.content.replace(
+      "m_xIsBusy := _xPhaseBusy;",
+      "_eExecuteState := eTestState_Passed;\nm_xIsBusy := TRUE;"
+    );
+    impure.frameworkTest!.targetMappings[0].testSourceSha256 = sha256(impureSource.content);
+    const impureCodes = codes(await generate(impure));
+    expect(impureCodes).toContain("TCFRAMEWORK_BUSY_OBSERVER_SIDE_EFFECT");
+    expect(impureCodes).toContain("TCFRAMEWORK_BUSY_OBSERVER_INVALID");
+
+    const foreignOwner = loadRequest("framework-limit-counter");
+    const foreignOwnerSource = frameworkSource(foreignOwner);
+    foreignOwnerSource.content = foreignOwnerSource.content.replace(
+      "END_FUNCTION_BLOCK\n",
+      [
+        "METHOD PUBLIC m_xResetHarness : BOOL",
+        "_xPhaseBusy := FALSE;",
+        "m_xResetHarness := TRUE;",
+        "END_METHOD",
+        "END_FUNCTION_BLOCK",
+        ""
+      ].join("\n")
+    );
+    foreignOwner.frameworkTest!.targetMappings[0].testSourceSha256 = sha256(foreignOwnerSource.content);
+    expect(codes(await generate(foreignOwner))).toContain("TCFRAMEWORK_PHASE_BUSY_OWNERSHIP");
   });
 
   it("publishes a structured harness diagnostic when execute never completes", async () => {

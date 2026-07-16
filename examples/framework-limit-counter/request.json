@@ -12,7 +12,7 @@
     },
     {
       "path": "test.st",
-      "content": "FUNCTION_BLOCK FB_Test_LimitCounter EXTENDS FB_TestCaseBase\nVAR\n    fbCut : FB_LimitCounter;\n    nScan : DINT;\nEND_VAR\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'FB_LimitCounter clamps at max';\n    _eExecuteState := eTestState_Running;\n    nScan := 0;\n    fbCut(i_xReset := TRUE, i_xEnable := FALSE, i_nLimit := 3);\n    _xPhaseBusy := TRUE;\nELSIF _xPhaseBusy THEN\n    nScan := nScan + 1;\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    IF nScan = 1 THEN\n        m_xAssertEqualDint(1, fbCut.q_nCount, 'first count should be 1');\n    ELSIF nScan = 2 THEN\n        m_xAssertEqualDint(2, fbCut.q_nCount, 'second count should be 2');\n    ELSIF nScan = 3 THEN\n        m_xAssertEqualDint(3, fbCut.q_nCount, 'third count should be 3');\n    ELSE\n        m_xAssertEqualDint(3, fbCut.q_nCount, 'counter should clamp at limit');\n        _eExecuteState := eTestState_Passed;\n        _xPhaseBusy := FALSE;\n    END_IF\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\n\nMETHOD PUBLIC m_xIsBusy : BOOL\nm_xIsBusy := _xPhaseBusy;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
+      "content": "FUNCTION_BLOCK FB_Test_LimitCounter EXTENDS FB_TestCaseBase\nVAR\n    fbCut : FB_LimitCounter;\n    udiStep : UDINT;\nEND_VAR\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'FB_LimitCounter clamps at max';\n    _eState := eTestState_Running;\n    _eExecuteState := eTestState_Running;\n    udiStep := 0;\n    fbCut(i_xReset := TRUE, i_xEnable := FALSE, i_nLimit := 3);\n    _xPhaseBusy := TRUE;\nELSIF _xPhaseBusy THEN\n    IF (_eState = eTestState_Running) AND (_eExecuteState = eTestState_Running) THEN\n        CASE udiStep OF\n            0:\n                fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n                m_xAssertEqualDint(1, fbCut.q_nCount, 'first count should be 1');\n                udiStep := 1;\n            1:\n                fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n                m_xAssertEqualDint(2, fbCut.q_nCount, 'second count should be 2');\n                udiStep := 2;\n            2:\n                fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n                m_xAssertEqualDint(3, fbCut.q_nCount, 'third count should be 3');\n                udiStep := 3;\n            ELSE\n                fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n                m_xAssertEqualDint(3, fbCut.q_nCount, 'counter should clamp at limit');\n                _eState := eTestState_Passed;\n                _eExecuteState := eTestState_Passed;\n                _xPhaseBusy := FALSE;\n        END_CASE\n    ELSE\n        _xPhaseBusy := FALSE;\n    END_IF\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\n\nMETHOD PUBLIC m_xIsBusy : BOOL\nm_xIsBusy := _xPhaseBusy;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
     },
     {
       "path": "main.st",
@@ -28,7 +28,7 @@
         "testFunctionBlock": "FB_Test_LimitCounter",
         "productionTarget": "FB_LimitCounter",
         "testSourcePath": "test.st",
-        "testSourceSha256": "4f30a1d6a2db69b97086656e32aed230c3f30ca9b22df69f409ebe2906b2d23e"
+        "testSourceSha256": "48da779121085cddf0c871868f1140db08ca7a463fd3c6225a484c7190e1b276"
       }
     ],
     "maxScans": 20

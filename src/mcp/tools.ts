@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { BackendRunResult, StrucppBackend } from "../backends/StrucppBackend.js";
 import { copyStandardFunctionBlockContracts } from "../backends/StandardFunctionBlockContracts.js";
 import { NormalizeRequest, SemanticTestReport, SemanticTestSubject, diagnostic } from "../domain/models.js";
+import { semanticArtifactIdentities } from "../domain/semanticArtifacts.js";
 import {
   sanitizeCompilerDiagnostics,
   sanitizeCompilerOutput,
@@ -26,7 +27,7 @@ export type ToolProgress = {
   tcgen?: {
     contract: "tcgen-framework-assertion-progress-v1";
     kind: "assertion_checkpoint";
-    phase: "queued" | "completed";
+    phase: "queued" | "running" | "completed";
     checkpointId: string;
     assertionId: string;
     testFunctionBlock: string;
@@ -36,7 +37,7 @@ export type ToolProgress = {
     reached: boolean;
     startedAt?: string;
     completedAt?: string;
-    status: SemanticTestReport["assertions"][number]["status"];
+    status: SemanticTestReport["assertions"][number]["status"] | "running";
   };
 };
 
@@ -60,7 +61,7 @@ export const toolDefinitions = [
     properties: { backend: { type: "string", enum: ["strucpp"] } }
   }),
   tool("tcgen_st_normalize", "Normalize inline TcGen review-ST sources into STruC++-compatible ST without executing tests.", normalizeSchema(false)),
-  tool("tcgen_st_test_generate", "Normalize inline TcGen review-ST sources and emit the generated STruC++ test file without execution.", normalizeSchema(true)),
+  tool("tcgen_st_test_generate", "Validate exact reviewable Framework ST and return it separately from the private STruC++ execution adapter without executing it.", normalizeSchema(true)),
   tool("tcgen_st_test_run", "Normalize inline TcGen review-ST sources, generate tests, execute STruC++, and return a semantic report.", normalizeSchema(true))
 ];
 
@@ -110,6 +111,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
       frameworkTargetCoverage: [...(generated.frameworkTargetCoverage ?? [])],
       assertions: [...(generated.assertions ?? [])],
       assertionLedger: buildFrameworkAssertionLedger(generated.assertions ?? [], false),
+      artifactIdentities: artifactIdentitiesFor(generated),
       generatedTestNames: [...generated.generatedTestNames],
       ...(generated.executionContract ? { executionContract: generated.executionContract } : {}),
       subject: subjectForTest(normalizedForReport.subject, generated),
@@ -181,19 +183,26 @@ export const toolHandlers: Record<string, ToolHandler> = {
       const sourcePaths = await workspaceManager.writeFiles(workspace, normalizedForRun.normalizedFiles);
       const [testPath] = await workspaceManager.writeFiles(workspace, [{ path: testFile.path, content: testFile.content }]);
       progress(context, { progress: 3, total: 5, message: "Running the complete semantic suite in one backend invocation." });
+      const checkpointProgress = createLiveCheckpointProgress(
+        context,
+        testFile,
+        assertionByCheckpointTest
+      );
       backendResult = await new StrucppBackend().run(sourcePaths, testPath, {
         timeoutMs: request.options?.timeoutMs,
         signal: context?.signal,
         onTestResult: test => {
           const assertion = assertionByCheckpointTest.get(test.name);
-          if (!assertion) return;
-          const [bound] = applyFrameworkAssertionExecution(
-            [assertion],
-            [test],
-            workspace
-          );
-          liveCheckpointStatuses.set(bound.assertionId, bound.status);
-          emitCheckpointProgress(context, [bound], "completed", 4, 5);
+          if (assertion) {
+            const [bound] = applyFrameworkAssertionExecution(
+              [assertion],
+              [test],
+              workspace
+            );
+            liveCheckpointStatuses.set(bound.assertionId, bound.status);
+            emitCheckpointProgress(context, [bound], "completed", 4, 5);
+          }
+          checkpointProgress.testCompleted(test.name);
         }
       });
     } catch (error) {
@@ -265,7 +274,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
 function emitCheckpointProgress(
   context: ToolHandlerContext | undefined,
   assertions: readonly SemanticTestReport["assertions"][number][],
-  phase: "queued" | "completed",
+  phase: "queued" | "running" | "completed",
   progressValue: number,
   total: number
 ): void {
@@ -277,7 +286,11 @@ function emitCheckpointProgress(
     ) {
       continue;
     }
-    const status = phase === "queued" ? "not_run" : assertion.status;
+    const status = phase === "queued"
+      ? "not_run"
+      : phase === "running"
+        ? "running"
+        : assertion.status;
     progress(context, {
       progress: progressValue,
       total,
@@ -294,8 +307,8 @@ function emitCheckpointProgress(
         checkpointTestName: assertion.checkpointTestName,
         ordinal: assertion.checkpointOrdinal,
         sourceLine: assertion.sourceLine,
-        reached: phase === "queued" ? false : assertion.reached,
-        ...(phase === "completed" && assertion.startedAt
+        reached: phase === "completed" ? assertion.reached : false,
+        ...(phase !== "queued" && assertion.startedAt
           ? { startedAt: assertion.startedAt }
           : {}),
         ...(phase === "completed" && assertion.completedAt
@@ -305,6 +318,45 @@ function emitCheckpointProgress(
       }
     });
   }
+}
+
+function createLiveCheckpointProgress(
+  context: ToolHandlerContext | undefined,
+  testFile: {
+    executionTestNames?: string[];
+    generatedTestNames: string[];
+  },
+  assertionsByTestName: ReadonlyMap<string, SemanticTestReport["assertions"][number]>
+): { testCompleted(name: string): void } {
+  const executionOrder = testFile.executionTestNames ?? testFile.generatedTestNames;
+  const started = new Set<string>();
+
+  const startNextCheckpointAfter = (completedIndex: number) => {
+    for (let index = completedIndex + 1; index < executionOrder.length; index += 1) {
+      const testName = executionOrder[index];
+      const assertion = assertionsByTestName.get(testName);
+      if (!assertion || started.has(testName)) continue;
+      started.add(testName);
+      emitCheckpointProgress(
+        context,
+        [{ ...assertion, startedAt: new Date().toISOString() }],
+        "running",
+        3,
+        5
+      );
+      break;
+    }
+  };
+
+  if (executionOrder.length > 0 && assertionsByTestName.has(executionOrder[0])) {
+    startNextCheckpointAfter(-1);
+  }
+  return {
+    testCompleted(name: string): void {
+      const completedIndex = executionOrder.indexOf(name);
+      if (completedIndex >= 0) startNextCheckpointAfter(completedIndex);
+    }
+  };
 }
 
 export async function runCli(argv: string[]): Promise<number> {
@@ -463,6 +515,7 @@ function buildReport(input: {
         generatedResultMismatch
       )
     ),
+    artifactIdentities: artifactIdentitiesFor(input.testFile),
     generatedTestNames: [...input.testFile.generatedTestNames],
     subject: subjectForTest(input.normalized.subject, input.testFile),
     verdict,
@@ -578,7 +631,7 @@ function assertionLedgerComplete(
     assertions.map(assertion => `framework ${assertion.testFunctionBlock}`)
   );
   return [...captureTests].every(name =>
-    tests.some(test => test.name === name && test.status === "passed")
+    tests.some(test => test.name === name && (test.status === "passed" || test.status === "failed"))
   );
 }
 
@@ -596,7 +649,7 @@ function logicalReportTests(
       const block = test.name.startsWith("framework ")
         ? test.name.slice("framework ".length)
         : undefined;
-      if (!block || !assertionBlocks.has(block) || test.status !== "passed") {
+      if (!block || !assertionBlocks.has(block)) {
         return { ...test };
       }
       const failed = assertions.filter(assertion =>
@@ -677,6 +730,9 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
                 "twinCatBistableAliasesV1",
                 "frameworkAssertionLedgerV1",
                 "frameworkAssertionProgressV1",
+                "frameworkLifecycleV1",
+                "frameworkArtifactRolesV1",
+                "frameworkAssertionRunningProgressV1",
                 ...(name === "tcgen_st_test_run"
                   ? ["candidateCompilePreflightV1"]
                   : [])
@@ -700,6 +756,7 @@ function tool(name: string, description: string, inputSchema: Record<string, unk
           "structuredContent.frameworkTargetCoverage",
           "structuredContent.assertions",
           "structuredContent.assertionLedger",
+          "structuredContent.artifactIdentities",
           "structuredContent.generatedTestNames",
           "structuredContent.backend.executionAttempted",
           "structuredContent.backend.standardFunctionBlockContracts",
@@ -824,6 +881,19 @@ function primaryTestArtifact(testFile: {
     return { ...testFile.frameworkTestFiles[0] };
   }
   return { path: testFile.path, content: testFile.content };
+}
+
+function artifactIdentitiesFor(testFile: {
+  path: string;
+  content: string;
+  mode?: "generated" | "framework";
+  frameworkTestFiles?: Array<{ path: string; content: string }>;
+}) {
+  return semanticArtifactIdentities({
+    mode: testFile.mode ?? "generated",
+    executionAdapter: { path: testFile.path, content: testFile.content },
+    frameworkSources: testFile.frameworkTestFiles
+  });
 }
 
 function sha256(text: string): string {

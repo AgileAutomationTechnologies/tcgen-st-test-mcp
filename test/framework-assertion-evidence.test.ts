@@ -112,7 +112,7 @@ describe("Framework assertion evidence", () => {
     }
   });
 
-  it("reports simultaneous native failures from fresh checkpoint instances in one backend run", async () => {
+  it("reports the first native failure and marks later guarded checkpoints not reached", async () => {
     const repo = localStrucppRepo();
     if (!repo) return;
     const request = loadRequest("framework-limit-counter");
@@ -137,15 +137,16 @@ describe("Framework assertion evidence", () => {
         expect(report.verdict).toBe("failed");
         expect(report.backend.executionAttempted).toBe(true);
         expect(report.assertions).toHaveLength(4);
-        expect(report.assertions.every(assertion => assertion.status === "failed")).toBe(true);
-        expect(report.assertions.every(assertion => assertion.reached)).toBe(true);
+        expect(report.assertions[0]).toMatchObject({ status: "failed", reached: true });
+        expect(report.assertions.slice(1).every(assertion => assertion.status === "not_reached")).toBe(true);
+        expect(report.assertions.slice(1).every(assertion => !assertion.reached)).toBe(true);
         expect(report.assertionLedger).toMatchObject({
           complete: true,
           expected: 4,
-          reached: 4,
+          reached: 1,
           passed: 0,
-          failed: 4,
-          notReached: 0
+          failed: 1,
+          notReached: 3
         });
         expect(backend).toHaveBeenCalledTimes(1);
       });

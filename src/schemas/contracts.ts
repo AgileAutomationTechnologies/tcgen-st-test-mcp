@@ -206,6 +206,11 @@ export const semanticReportSchema = {
       items: { $ref: "#/$defs/frameworkAssertionEvidence" }
     },
     assertionLedger: { $ref: "#/$defs/frameworkAssertionLedger" },
+    artifactIdentities: {
+      type: "array",
+      uniqueItems: true,
+      items: { $ref: "#/$defs/semanticArtifactIdentity" }
+    },
     generatedTestNames: {
       type: "array",
       uniqueItems: true,
@@ -336,6 +341,20 @@ function commonReportDefs() {
       properties: {
         path: { type: "string" },
         content: { type: "string" }
+      }
+    },
+    semanticArtifactIdentity: {
+      type: "object",
+      required: ["artifactId", "role", "path", "sha256", "byteLength", "primary", "visibility"],
+      additionalProperties: false,
+      properties: {
+        artifactId: { type: "string", pattern: "^artifact:[a-f0-9]{64}$" },
+        role: { enum: ["framework_st", "execution_adapter"] },
+        path: { type: "string", minLength: 1 },
+        sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        byteLength: { type: "integer", minimum: 0 },
+        primary: { type: "boolean" },
+        visibility: { enum: ["review", "technical"] }
       }
     },
     semanticTestSubject: {

@@ -36,7 +36,7 @@ describe("MCP tool metadata", () => {
       if (tool.name === "tcgen_st_test_run") {
         expect(metadata.capabilities).toContain("candidateCompilePreflightV1");
       }
-      expect(metadata.serverVersion).toBe("0.8.1");
+      expect(metadata.serverVersion).toBe("0.8.2");
       expect(metadata.evidencePaths).toEqual(
         expect.arrayContaining([
           "structuredContent.testMode",

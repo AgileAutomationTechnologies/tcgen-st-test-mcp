@@ -18,6 +18,7 @@ type GenerationReport = {
   testMode: "generated" | "framework";
   coveredExecutableObjects: string[];
   frameworkTargetCoverage: SemanticTestReport["frameworkTargetCoverage"];
+  artifactIdentities: NonNullable<SemanticTestReport["artifactIdentities"]>;
   generatedTestNames: string[];
   subject: SemanticTestReport["subject"];
   testFile: { path: string; content: string };
@@ -75,6 +76,22 @@ describe("semantic report v2 contract", () => {
     expect(generated.testFile).toEqual(generated.frameworkTestFiles?.[0]);
     expect(generated.generatedTestFile.path).toBe("semantic_framework_tests.st");
     expect(generated.generatedTestFile).not.toEqual(generated.testFile);
+    expect(generated.artifactIdentities).toEqual([
+      expect.objectContaining({
+        role: "framework_st",
+        path: generated.testFile.path,
+        sha256: sha256(generated.testFile.content),
+        primary: true,
+        visibility: "review"
+      }),
+      expect.objectContaining({
+        role: "execution_adapter",
+        path: generated.generatedTestFile.path,
+        sha256: sha256(generated.generatedTestFile.content),
+        primary: false,
+        visibility: "technical"
+      })
+    ]);
     expect(run.testMode).toBe("framework");
     expect(run.generatedTestNames).toEqual(generated.generatedTestNames);
     expect(run.coveredExecutableObjects).toEqual(generated.coveredExecutableObjects);
@@ -84,6 +101,7 @@ describe("semantic report v2 contract", () => {
     expect(run.artifacts?.generatedTestFile).toEqual(generated.generatedTestFile);
     expect(run.artifacts?.testFile).toEqual(generated.testFile);
     expect(run.artifacts?.frameworkTestFiles).toEqual(generated.frameworkTestFiles);
+    expect(run.artifactIdentities).toEqual(generated.artifactIdentities);
     expect(validateSemanticReport(run)).toEqual([]);
   });
 
@@ -109,6 +127,7 @@ describe("semantic report v2 contract", () => {
       frameworkTargetCoverage: _frameworkTargetCoverage,
       assertions: _assertions,
       assertionLedger: _assertionLedger,
+      artifactIdentities: _artifactIdentities,
       generatedTestNames: _generatedTestNames,
       ...legacyFields
     } = report;
@@ -212,6 +231,9 @@ describe("semantic report v2 contract", () => {
     expect(metadata.capabilities).toContain("twinCatBistableAliasesV1");
     expect(metadata.capabilities).toContain("frameworkAssertionLedgerV1");
     expect(metadata.capabilities).toContain("frameworkAssertionProgressV1");
+    expect(metadata.capabilities).toContain("frameworkLifecycleV1");
+    expect(metadata.capabilities).toContain("frameworkArtifactRolesV1");
+    expect(metadata.capabilities).toContain("frameworkAssertionRunningProgressV1");
     expect(metadata.capabilities).toContain("candidateCompilePreflightV1");
   });
 });

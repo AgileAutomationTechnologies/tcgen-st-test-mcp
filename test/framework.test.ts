@@ -86,6 +86,11 @@ describe("framework-style semantic tests", () => {
     expect(result.generatedTestFile.content.indexOf("m_xExecute(i_xTrigger := FALSE)"))
       .toBeLessThan(result.generatedTestFile.content.indexOf("m_xIsBusy()", result.generatedTestFile.content.indexOf("ADVANCE_TIME")));
     expect(result.generatedTestFile.content).toContain("ASSERT_TRUE(tcframework_execute_complete);");
+    expect(result.generatedTestFile.content).toContain("ASSERT_EQ(result.eState, eTestState_Passed);");
+    expect(result.generatedTestFile.content).toContain("ASSERT_EQ(result.eExecuteState, eTestState_Passed);");
+    expect(result.generatedTestFile.content).toContain("ASSERT_TRUE(result.udiAssertions > 0);");
+    expect(result.generatedTestFile.content).toContain("ASSERT_EQ(result.udiFailed, 0);");
+    expect(result.generatedTestFile.content).toContain("ASSERT_EQ(result.udiPassed, result.udiAssertions);");
     expect(result.executionContract).toBe("tcgen-framework-multiscan-v1");
     expect(result.generatedTestFile.content).toContain("TcGenAssertionLedgerReached(");
     expect(result.generatedTestFile.content).toContain("TcGenAssertionLedgerPassed(");
@@ -109,7 +114,7 @@ describe("framework-style semantic tests", () => {
         testSourcePath: "test.st",
         testSourceSha256: sha256(result.testFile.content),
         assertionCount: 4,
-        targetReferenceCount: 6,
+        targetReferenceCount: 9,
         verified: true
       }
     ]);

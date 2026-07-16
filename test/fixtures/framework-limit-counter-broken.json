@@ -12,7 +12,7 @@
     },
     {
       "path": "test.st",
-      "content": "FUNCTION_BLOCK FB_Test_LimitCounter EXTENDS FB_TestCaseBase\nVAR\n    fbCut : FB_LimitCounter;\nEND_VAR\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'FB_LimitCounter clamps at max';\n    _eExecuteState := eTestState_Running;\n    fbCut(i_xReset := TRUE, i_xEnable := FALSE, i_nLimit := 3);\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(1, fbCut.q_nCount, 'first count should be 1');\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(2, fbCut.q_nCount, 'second count should be 2');\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(3, fbCut.q_nCount, 'third count should be 3');\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(3, fbCut.q_nCount, 'counter should clamp at limit');\n    _eExecuteState := eTestState_Passed;\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
+      "content": "FUNCTION_BLOCK FB_Test_LimitCounter EXTENDS FB_TestCaseBase\nVAR\n    fbCut : FB_LimitCounter;\nEND_VAR\nMETHOD PUBLIC m_xExecute : BOOL\nVAR_INPUT\n    i_xTrigger : BOOL;\nEND_VAR\nIF i_xTrigger THEN\n    _sTestCaseName := 'FB_LimitCounter clamps at max';\n    _eState := eTestState_Running;\n    _eExecuteState := eTestState_Running;\n    fbCut(i_xReset := TRUE, i_xEnable := FALSE, i_nLimit := 3);\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(1, fbCut.q_nCount, 'first count should be 1');\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(2, fbCut.q_nCount, 'second count should be 2');\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(3, fbCut.q_nCount, 'third count should be 3');\n    fbCut(i_xReset := FALSE, i_xEnable := TRUE, i_nLimit := 3);\n    m_xAssertEqualDint(3, fbCut.q_nCount, 'counter should clamp at limit');\n    _eState := eTestState_Passed;\n    _eExecuteState := eTestState_Passed;\n    _xPhaseBusy := FALSE;\nEND_IF\nm_xExecute := TRUE;\nEND_METHOD\nEND_FUNCTION_BLOCK\n"
     },
     {
       "path": "main.st",
@@ -28,7 +28,7 @@
         "testFunctionBlock": "FB_Test_LimitCounter",
         "productionTarget": "FB_LimitCounter",
         "testSourcePath": "test.st",
-        "testSourceSha256": "8ac99d6a08d09da4dad682bbb0afb5fd25fb03c02ae414cc0fddee3fafbfc6ab"
+        "testSourceSha256": "258494ffdaa237ac3757103db37dc2f8caf49db4db696c5c8298875a735299e2"
       }
     ],
     "maxScans": 20
