@@ -332,6 +332,23 @@ export interface SemanticTestReport {
     executable?: string;
     cliMode?: "native" | "node";
     gppExecutable?: string;
+    timeout?: {
+      timeoutMs: number;
+      durationMs: number;
+      terminationStatus: "process_tree_terminated" | "cancelled";
+      owner: "framework" | "production" | "backend" | "environment" | "unknown";
+      generatedTestSourceSha256?: string;
+      stdoutTail: string;
+      stderrTail: string;
+      lastProgressPhase: string;
+      checkpointSummary: {
+        total: number;
+        started: number;
+        completed: number;
+        failed: number;
+        notReached: number;
+      };
+    };
     standardFunctionBlockContracts: StandardFunctionBlockContracts;
     standardFunctionBlockContractQualified: boolean;
     beckhoffSimulation: BeckhoffSimulationIdentity;

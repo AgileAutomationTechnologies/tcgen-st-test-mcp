@@ -46,6 +46,7 @@ export interface BackendRunResult {
   stderr: string;
   exitCode: number | null;
   durationMs: number;
+  timeout?: BackendTimeoutContext;
   diagnostics: Diagnostic[];
   tests: Array<{
     name: string;
@@ -59,6 +60,23 @@ export interface BackendRunResult {
   >;
   standardFunctionBlockContractQualified: boolean;
   beckhoffSimulation: BeckhoffSimulationIdentity;
+}
+
+export interface BackendTimeoutContext {
+  timeoutMs: number;
+  durationMs: number;
+  terminationStatus: "process_tree_terminated" | "cancelled";
+  owner: "framework" | "production" | "backend" | "environment" | "unknown";
+  generatedTestSourceSha256?: string;
+  stdoutTail: string;
+  stderrTail: string;
+  checkpointSummary: {
+    total: number;
+    started: number;
+    completed: number;
+    failed: number;
+    notReached: number;
+  };
 }
 
 type ResolvedCommand = {
@@ -345,6 +363,7 @@ export class StrucppBackend {
       },
     );
     if (result.cancelled) {
+      const durationMs = Date.now() - started;
       diagnostics.push(
         diagnostic(
           "error",
@@ -361,7 +380,15 @@ export class StrucppBackend {
         cliMode: backend.command.mode,
         version: backend.version,
         gppExecutable: gpp.executable,
-        durationMs: Date.now() - started,
+        durationMs,
+        timeout: await buildBackendTimeoutContext({
+          timeoutMs,
+          durationMs,
+          result,
+          observedTests,
+          testPath,
+          terminationStatus: "cancelled",
+        }),
         diagnostics,
         tests: [],
         beckhoffSimulation:
@@ -374,6 +401,7 @@ export class StrucppBackend {
       };
     }
     if (result.timedOut) {
+      const durationMs = Date.now() - started;
       diagnostics.push(
         diagnostic(
           "error",
@@ -390,7 +418,15 @@ export class StrucppBackend {
         cliMode: backend.command.mode,
         version: backend.version,
         gppExecutable: gpp.executable,
-        durationMs: Date.now() - started,
+        durationMs,
+        timeout: await buildBackendTimeoutContext({
+          timeoutMs,
+          durationMs,
+          result,
+          observedTests,
+          testPath,
+          terminationStatus: "process_tree_terminated",
+        }),
         diagnostics,
         tests: [],
         beckhoffSimulation:
@@ -1871,6 +1907,47 @@ function spawnWithTimeout(
       finish({ stdout, stderr, exitCode: code });
     });
   });
+}
+
+async function buildBackendTimeoutContext(input: {
+  timeoutMs: number;
+  durationMs: number;
+  result: { stdout: string; stderr: string };
+  observedTests: Map<string, BackendRunResult["tests"][number]>;
+  testPath: string;
+  terminationStatus: BackendTimeoutContext["terminationStatus"];
+}): Promise<BackendTimeoutContext> {
+  const observed = [...input.observedTests.values()];
+  return {
+    timeoutMs: input.timeoutMs,
+    durationMs: input.durationMs,
+    terminationStatus: input.terminationStatus,
+    owner: "unknown",
+    generatedTestSourceSha256: await safeSha256File(input.testPath),
+    stdoutTail: boundedOutputTail(input.result.stdout),
+    stderrTail: boundedOutputTail(input.result.stderr),
+    checkpointSummary: {
+      total: observed.length,
+      started: observed.length,
+      completed: observed.length,
+      failed: observed.filter((test) => test.status === "failed").length,
+      notReached: 0,
+    },
+  };
+}
+
+async function safeSha256File(path: string): Promise<string | undefined> {
+  try {
+    return await sha256File(path);
+  } catch {
+    return undefined;
+  }
+}
+
+function boundedOutputTail(value: string, limit = 2_000): string {
+  const text = String(value ?? "");
+  if (text.length <= limit) return text;
+  return text.slice(text.length - limit);
 }
 
 function emitCompleteLines(

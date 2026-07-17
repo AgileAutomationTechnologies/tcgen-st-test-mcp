@@ -274,6 +274,7 @@ export const semanticReportSchema = {
         executable: { type: "string" },
         cliMode: { enum: ["native", "node"] },
         gppExecutable: { type: "string" },
+        timeout: { $ref: "#/$defs/backendTimeoutContext" },
         standardFunctionBlockContracts: {
           $ref: "#/$defs/standardFunctionBlockContracts",
         },
@@ -378,6 +379,55 @@ function commonReportDefs() {
       },
     },
     diagnostic: diagnosticSchema,
+    backendTimeoutContext: {
+      type: "object",
+      required: [
+        "timeoutMs",
+        "durationMs",
+        "terminationStatus",
+        "owner",
+        "stdoutTail",
+        "stderrTail",
+        "lastProgressPhase",
+        "checkpointSummary",
+      ],
+      additionalProperties: false,
+      properties: {
+        timeoutMs: { type: "integer", minimum: 0 },
+        durationMs: { type: "integer", minimum: 0 },
+        terminationStatus: {
+          enum: ["process_tree_terminated", "cancelled"],
+        },
+        owner: {
+          enum: [
+            "framework",
+            "production",
+            "backend",
+            "environment",
+            "unknown",
+          ],
+        },
+        generatedTestSourceSha256: {
+          type: "string",
+          pattern: "^[a-f0-9]{64}$",
+        },
+        stdoutTail: { type: "string" },
+        stderrTail: { type: "string" },
+        lastProgressPhase: { type: "string", minLength: 1 },
+        checkpointSummary: {
+          type: "object",
+          required: ["total", "started", "completed", "failed", "notReached"],
+          additionalProperties: false,
+          properties: {
+            total: { type: "integer", minimum: 0 },
+            started: { type: "integer", minimum: 0 },
+            completed: { type: "integer", minimum: 0 },
+            failed: { type: "integer", minimum: 0 },
+            notReached: { type: "integer", minimum: 0 },
+          },
+        },
+      },
+    },
     rewriteRecord: {
       type: "object",
       required: [

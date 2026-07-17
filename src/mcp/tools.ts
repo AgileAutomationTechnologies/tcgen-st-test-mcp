@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import {
   BackendRunResult,
+  BackendTimeoutContext,
   expectedTransparentBeckhoffSimulation,
   StrucppBackend,
 } from "../backends/StrucppBackend.js";
@@ -743,6 +744,19 @@ function buildReport(input: {
       ),
     );
   }
+  const timeoutContext = semanticBackendTimeoutContext({
+    backendResult: input.backendResult,
+    mode: input.testFile.mode,
+    assertions,
+    executionTests,
+    generatedTestNames: input.testFile.executionTestNames ?? input.testFile.generatedTestNames,
+    diagnostics: sanitizedDiagnostics,
+    incompleteFrameworkExecution,
+    generatedResultMismatch,
+    sanitizationWorkspace: input.sanitizationWorkspace,
+    testSource,
+  });
+  if (timeoutContext) backend.timeout = timeoutContext;
 
   const report: SemanticTestReport = {
     schemaVersion: 2,
@@ -891,6 +905,97 @@ function frameworkExecutionIncomplete(
       .map((test) => test.message ?? ""),
   ].join("\n");
   return /\btcframework_execute_complete\b/i.test(output);
+}
+
+function semanticBackendTimeoutContext(input: {
+  backendResult?: BackendRunResult;
+  mode: "generated" | "framework";
+  assertions: readonly SemanticTestReport["assertions"][number][];
+  executionTests: readonly SemanticTestReport["tests"][number][];
+  generatedTestNames: readonly string[];
+  diagnostics: readonly SemanticTestReport["diagnostics"][number][];
+  incompleteFrameworkExecution: boolean;
+  generatedResultMismatch: string | undefined;
+  sanitizationWorkspace?: string;
+  testSource: string;
+}): (BackendTimeoutContext & { lastProgressPhase: string }) | undefined {
+  if (!input.backendResult?.timeout) return undefined;
+  const timeout = input.backendResult.timeout;
+  const expectedTotal =
+    input.mode === "framework"
+      ? Math.max(input.assertions.length, input.generatedTestNames.length)
+      : input.generatedTestNames.length;
+  const completed = input.executionTests.filter(
+    (test) => test.status === "passed" || test.status === "failed",
+  ).length;
+  const failed = input.executionTests.filter(
+    (test) => test.status === "failed",
+  ).length;
+  const owner = timeoutOwner(
+    timeout,
+    input.diagnostics,
+    input.incompleteFrameworkExecution,
+    input.generatedResultMismatch,
+  );
+  const stdoutTail = sanitizeCompilerOutput(
+    timeout.stdoutTail,
+    input.sanitizationWorkspace,
+  );
+  const stderrTail = sanitizeCompilerOutput(
+    timeout.stderrTail,
+    input.sanitizationWorkspace,
+  );
+  return {
+    timeoutMs: timeout.timeoutMs,
+    durationMs: timeout.durationMs,
+    terminationStatus: timeout.terminationStatus,
+    owner,
+    generatedTestSourceSha256:
+      timeout.generatedTestSourceSha256 || input.testSource,
+    stdoutTail,
+    stderrTail,
+    lastProgressPhase:
+      completed > 0
+        ? "backend_test_result"
+        : stdoutTail || stderrTail
+          ? "backend_output"
+          : "backend_wait",
+    checkpointSummary: {
+      total: Math.max(expectedTotal, timeout.checkpointSummary.total),
+      started: Math.max(timeout.checkpointSummary.started, completed),
+      completed,
+      failed,
+      notReached: Math.max(0, expectedTotal - completed),
+    },
+  };
+}
+
+function timeoutOwner(
+  timeout: BackendTimeoutContext,
+  diagnostics: readonly SemanticTestReport["diagnostics"][number][],
+  incompleteFrameworkExecution: boolean,
+  generatedResultMismatch: string | undefined,
+): BackendTimeoutContext["owner"] {
+  if (incompleteFrameworkExecution) return "framework";
+  if (
+    diagnostics.some(
+      (item) =>
+        item.code === "TCFRAMEWORK_EXECUTE_INCOMPLETE" ||
+        item.sourceKind === "generated_test_harness",
+    )
+  ) {
+    return "framework";
+  }
+  if (diagnostics.some((item) => item.sourceKind === "candidate")) {
+    return "production";
+  }
+  if (diagnostics.some((item) => item.sourceKind === "backend")) {
+    return "backend";
+  }
+  if (generatedResultMismatch && timeout.checkpointSummary.completed > 0) {
+    return "backend";
+  }
+  return timeout.owner || "unknown";
 }
 
 function assertionLedgerComplete(

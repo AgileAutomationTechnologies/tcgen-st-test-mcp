@@ -173,6 +173,14 @@ describe("failure paths", () => {
         expect(report.summary.timedOut).toBe(1);
         expect(report.summary.total).toBe(1);
         expect(report.diagnostics.map(item => item.code)).toContain("SANDBOX_TIMEOUT");
+        expect(report.backend.timeout).toMatchObject({
+          timeoutMs: 1000,
+          owner: "unknown",
+          terminationStatus: "process_tree_terminated",
+          lastProgressPhase: "backend_wait",
+        });
+        expect(report.backend.timeout?.generatedTestSourceSha256).toMatch(/^[a-f0-9]{64}$/);
+        expect(report.backend.timeout?.checkpointSummary.total).toBeGreaterThanOrEqual(1);
       });
     } finally {
       await rmRetry(tempDir);
