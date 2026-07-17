@@ -130,6 +130,120 @@ describe("framework-style semantic tests", () => {
     expect(result.diagnostics.map(item => item.code)).toContain("TCFRAMEWORK_SHIM_APPLIED");
   });
 
+  it("keeps Framework ST portable while isolating project dependencies in the adapter", async () => {
+    const request = loadRequest("framework-limit-counter");
+    const dependency = {
+      path: "project/ReadSensor.st",
+      content: [
+        "FUNCTION ReadSensor : DINT",
+        "ReadSensor := 99;",
+        "END_FUNCTION"
+      ].join("\n")
+    };
+    request.sources.push(dependency);
+    request.scope = { mode: "all" };
+    request.projectDependencySourceSha256 = [{
+      path: dependency.path,
+      sourceSha256: createHash("sha256").update(dependency.content, "utf8").digest("hex")
+    }];
+    request.dependencySimulations = [{
+      frameworkTest: "FB_Test_LimitCounter",
+      kind: "function",
+      functionName: "ReadSensor",
+      returnValue: { type: "DINT", value: 7 }
+    }];
+
+    const result = (await toolHandlers.tcgen_st_test_generate(
+      request as unknown as Record<string, unknown>
+    )) as {
+      normalizedFiles: Array<{ content: string }>;
+      generatedTestFile: { content: string };
+      frameworkTestFiles: Array<{ content: string }>;
+      dependencySimulations: unknown[];
+    };
+
+    const normalized = result.normalizedFiles.map(file => file.content).join("\n");
+    expect(normalized).toContain("FUNCTION ReadSensor : DINT");
+    expect(normalized).not.toContain("ReadSensor := 99;");
+    expect(result.generatedTestFile.content).toContain("MOCK_FUNCTION ReadSensor RETURNS 7;");
+    expect(result.frameworkTestFiles[0].content).not.toContain("MOCK_FUNCTION");
+    expect(result.frameworkTestFiles[0].content).toBe(
+      request.sources.find(source => source.path === "test.st")?.content
+    );
+    expect(result.dependencySimulations).toEqual(request.dependencySimulations);
+  });
+
+  it("stubs project FB bodies and applies fixed outputs only in the offline adapter", async () => {
+    const request = loadRequest("framework-limit-counter");
+    const candidate = request.sources.find(source => source.path === request.candidateSourcePath)!;
+    candidate.content = [
+      "FUNCTION_BLOCK FB_LimitCounter",
+      "VAR_OUTPUT",
+      "    q_nCount : DINT;",
+      "END_VAR",
+      "VAR",
+      "    fbDependency : FB_Dependency;",
+      "END_VAR",
+      "fbDependency();",
+      "q_nCount := fbDependency.q_nValue;",
+      "END_FUNCTION_BLOCK"
+    ].join("\n");
+    const dependency = {
+      path: "project/FB_Dependency.st",
+      content: [
+        "FUNCTION_BLOCK FB_Dependency",
+        "VAR_OUTPUT",
+        "    q_nValue : DINT;",
+        "END_VAR",
+        "q_nValue := 99;",
+        "END_FUNCTION_BLOCK"
+      ].join("\n")
+    };
+    request.sources.push(dependency);
+    request.projectDependencySourceSha256 = [{
+      path: dependency.path,
+      sourceSha256: createHash("sha256").update(dependency.content, "utf8").digest("hex")
+    }];
+    request.dependencySimulations = [{
+      frameworkTest: "FB_Test_LimitCounter",
+      kind: "function_block",
+      instancePath: "fbCut.fbDependency",
+      outputs: [{ member: "q_nValue", type: "DINT", value: 7 }]
+    }];
+
+    const result = (await toolHandlers.tcgen_st_test_generate(
+      request as unknown as Record<string, unknown>
+    )) as {
+      normalizedFiles: Array<{ path: string; content: string }>;
+      generatedTestFile: { content: string };
+      frameworkTestFiles: Array<{ content: string }>;
+    };
+
+    const dependencyOutput = result.normalizedFiles.map(file => file.content).join("\n");
+    expect(dependencyOutput).toContain("FUNCTION_BLOCK FB_Dependency");
+    expect(dependencyOutput).toContain("q_nValue");
+    expect(dependencyOutput).not.toContain("q_nValue := 99;");
+    expect(result.generatedTestFile.content).toContain("MOCK test_FB_Test_LimitCounter_capture.fbCut.fbDependency;");
+    expect(result.generatedTestFile.content).toContain("fbCut.fbDependency.q_nValue := 7;");
+    expect(result.frameworkTestFiles[0].content).not.toContain("MOCK ");
+  });
+
+  it("never stubs the exact candidate even if an untrusted request lists its path", async () => {
+    const request = loadRequest("framework-limit-counter");
+    const candidate = request.sources.find(source => source.path === request.candidateSourcePath)!;
+    request.projectDependencySourceSha256 = [{
+      path: candidate.path,
+      sourceSha256: createHash("sha256").update(candidate.content, "utf8").digest("hex")
+    }];
+
+    const result = (await toolHandlers.tcgen_st_test_generate(
+      request as unknown as Record<string, unknown>
+    )) as { normalizedFiles: Array<{ content: string }> };
+
+    expect(result.normalizedFiles.map(file => file.content).join("\n"))
+      .toContain("q_nCount := q_nCount + 1;");
+  });
+
   it("discovers framework tests when none are explicitly selected", async () => {
     const request = loadRequest("framework-limit-counter");
     request.frameworkTest = { ...request.frameworkTest!, mode: "tcgen-test-framework", testFunctionBlocks: undefined };

@@ -81,6 +81,9 @@ export function createSemanticReportContractFixture(input) {
   return {
     mcpVersion: input.packageVersion,
     schemaVersion: 2,
+    verificationProfile: "isolated_semantic",
+    integrationCoverage: "not_claimed",
+    dependencySimulations: [...(generated.dependencySimulations ?? [])],
     testMode: "framework",
     coveredExecutableObjects: [...generated.coveredExecutableObjects],
     frameworkTargetCoverage: generated.frameworkTargetCoverage.map(item => ({ ...item })),

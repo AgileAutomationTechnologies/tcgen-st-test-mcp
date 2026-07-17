@@ -185,6 +185,9 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const response = {
       schemaVersion: 2,
       testMode: generated.mode,
+      verificationProfile: "isolated_semantic" as const,
+      integrationCoverage: "not_claimed" as const,
+      dependencySimulations: [...(request.dependencySimulations ?? [])],
       coveredExecutableObjects: [...generated.coveredExecutableObjects],
       frameworkTargetCoverage: [...(generated.frameworkTargetCoverage ?? [])],
       assertions: [...(generated.assertions ?? [])],
@@ -297,6 +300,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
         diagnostics: preflightDiagnostics,
         includeArtifacts: request.options?.includeArtifacts === true,
         executionPurpose: candidateCompilePreflightPurpose(request),
+        dependencySimulations: request.dependencySimulations ?? [],
       });
       emitCheckpointProgress(context, report.assertions, "completed", 5, 5);
       progress(context, {
@@ -399,6 +403,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
         sanitizationWorkspace: workspace,
         workspace: keepWorkspace ? workspace : undefined,
         executionPurpose: candidateCompilePreflightPurpose(request),
+        dependencySimulations: request.dependencySimulations ?? [],
       });
       emitCheckpointProgress(context, report.assertions, "completed", 5, 5);
       progress(context, {
@@ -429,6 +434,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
       sanitizationWorkspace: workspace,
       workspace: keepWorkspace ? workspace : undefined,
       executionPurpose: candidateCompilePreflightPurpose(request),
+      dependencySimulations: request.dependencySimulations ?? [],
     });
     emitCheckpointProgress(
       context,
@@ -605,6 +611,7 @@ function buildReport(input: {
   sanitizationWorkspace?: string;
   workspace?: string;
   executionPurpose?: SemanticTestReport["executionPurpose"];
+  dependencySimulations: SemanticTestReport["dependencySimulations"];
 }): SemanticTestReport {
   const executionTests = (input.backendResult?.tests ?? []).map((test) => ({
     ...test,
@@ -764,6 +771,9 @@ function buildReport(input: {
       ? { executionPurpose: input.executionPurpose }
       : {}),
     testMode: input.testFile.mode,
+    verificationProfile: "isolated_semantic",
+    integrationCoverage: "not_claimed",
+    dependencySimulations: [...input.dependencySimulations],
     coveredExecutableObjects: [...input.testFile.coveredExecutableObjects],
     frameworkTargetCoverage: [
       ...(input.testFile.frameworkTargetCoverage ?? []),
@@ -1222,6 +1232,58 @@ function normalizeSchema(requireTestSpec: boolean): Record<string, unknown> {
         properties: {
           path: { type: "string" },
           content: { type: "string" },
+        },
+      },
+    },
+    projectDependencySourceSha256: {
+      type: "array",
+      description:
+        "Relay-validated Project Explorer source identities whose executable bodies are replaced by signature-only stubs for isolated execution.",
+      items: {
+        type: "object",
+        required: ["path", "sourceSha256"],
+        additionalProperties: false,
+        properties: {
+          path: { type: "string", minLength: 1 },
+          sourceSha256: { type: "string", pattern: "^[a-fA-F0-9]{64}$" },
+        },
+      },
+    },
+    dependencySimulations: {
+      type: "array",
+      description:
+        "Offline-only fixed dependency behavior. It is never copied into Framework ST.",
+      items: {
+        type: "object",
+        required: ["frameworkTest", "kind"],
+        additionalProperties: false,
+        properties: {
+          frameworkTest: { type: "string", minLength: 1 },
+          kind: { type: "string", enum: ["function_block", "function"] },
+          instancePath: { type: "string", minLength: 1 },
+          outputs: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["member", "type", "value"],
+              additionalProperties: false,
+              properties: {
+                member: { type: "string", minLength: 1 },
+                type: { type: "string", minLength: 1 },
+                value: {},
+              },
+            },
+          },
+          functionName: { type: "string", minLength: 1 },
+          returnValue: {
+            type: "object",
+            required: ["type", "value"],
+            additionalProperties: false,
+            properties: {
+              type: { type: "string", minLength: 1 },
+              value: {},
+            },
+          },
         },
       },
     },

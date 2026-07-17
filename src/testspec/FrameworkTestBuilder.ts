@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   Diagnostic,
+  DependencySimulation,
   FrameworkAssertionEvidence,
   FrameworkExecutionContract,
   FrameworkTestConfig,
@@ -99,7 +100,8 @@ export class FrameworkTestBuilder {
   generate(
     normalized: NormalizeResult,
     config: FrameworkTestConfig | undefined,
-    submittedSources: SourceFile[]
+    submittedSources: SourceFile[],
+    dependencySimulations: DependencySimulation[] | undefined = undefined
   ): FrameworkTestFile {
     const diagnostics: Diagnostic[] = [];
     if (!isFrameworkConfig(config)) {
@@ -118,6 +120,11 @@ export class FrameworkTestBuilder {
     const assertions = withFrameworkAssertionCheckpoints(targetCoverage.assertions);
     diagnostics.push(...targetCoverage.diagnostics);
     diagnostics.push(...frameworkAssertionCheckpointDiagnostics(assertions));
+    const simulations = validateDependencySimulations(
+      dependencySimulations,
+      selected.map(testBlock => testBlock.name),
+      diagnostics
+    );
     diagnostics.push(...validateFrameworkExecutionContract(
       config,
       selected,
@@ -165,7 +172,7 @@ export class FrameworkTestBuilder {
         FRAMEWORK_EXECUTION_CONTRACT
       );
     }
-    const wrappers = emitWrapperTests(selected, maxScans, assertions);
+    const wrappers = emitWrapperTests(selected, maxScans, assertions, simulations);
     const content = wrappers.content;
     return {
       path: "semantic_framework_tests.st",
@@ -313,7 +320,8 @@ function assertionLedgerCapacity(
 function emitWrapperTests(
   testBlocks: TcGenObject[],
   maxScans: number,
-  assertions: readonly FrameworkAssertionEvidence[]
+  assertions: readonly FrameworkAssertionEvidence[],
+  dependencySimulations: readonly DependencySimulation[]
 ): { content: string; generatedTestNames: string[]; executionTestNames: string[] } {
   const lines: string[] = [];
   const generatedTestNames: string[] = [];
@@ -322,11 +330,14 @@ function emitWrapperTests(
     const blockAssertions = assertions.filter(
       assertion => assertion.testFunctionBlock.toLowerCase() === testBlock.name.toLowerCase()
     );
+    const blockSimulations = dependencySimulations.filter(
+      simulation => simulation.frameworkTest.toLowerCase() === testBlock.name.toLowerCase()
+    );
     const captureName = frameworkWrapperName(testBlock.name);
     generatedTestNames.push(captureName);
     executionTestNames.push(captureName);
     lines.push(`TEST '${escapeString(captureName)}'`);
-    emitFreshFrameworkExecution(lines, testBlock.name, maxScans, "capture");
+    emitFreshFrameworkExecution(lines, testBlock.name, maxScans, "capture", blockSimulations);
     lines.push("ASSERT_TRUE(GVL_TcGenAssertionLedger__diCount > 0);");
     emitFinalFrameworkResultAssertions(lines);
     lines.push("END_TEST", "");
@@ -339,7 +350,8 @@ function emitWrapperTests(
         lines,
         testBlock.name,
         maxScans,
-        `checkpoint_${assertion.checkpointOrdinal ?? 0}`
+        `checkpoint_${assertion.checkpointOrdinal ?? 0}`,
+        blockSimulations
       );
       lines.push(
         `ASSERT_TRUE(TcGenAssertionLedgerReached('${escapeString(assertion.assertionId)}'), 'TCFRAMEWORK_ASSERTION_REACHED:${escapeString(assertion.checkpointId ?? assertion.assertionId)}');`
@@ -362,7 +374,8 @@ function emitFreshFrameworkExecution(
   lines: string[],
   testBlockName: string,
   maxScans: number,
-  suffix: string
+  suffix: string,
+  dependencySimulations: readonly DependencySimulation[]
 ): void {
   const instance = sanitizeIdentifier(`test_${testBlockName}_${suffix}`);
   lines.push("VAR");
@@ -370,6 +383,7 @@ function emitFreshFrameworkExecution(
   lines.push("    tcframework_execute_complete : BOOL;");
   lines.push("    result : ST_TestCaseResult;");
   lines.push("END_VAR");
+  emitDependencySimulations(lines, instance, dependencySimulations);
   lines.push(`${instance}.m_xSetup(i_xTrigger := TRUE);`);
   lines.push(`${instance}.m_xSetup(i_xTrigger := FALSE);`);
   lines.push(`${instance}.m_xExecute(i_xTrigger := TRUE);`);
@@ -391,6 +405,105 @@ function emitFreshFrameworkExecution(
   lines.push(`result := ${instance}.m_stGetResult();`);
   lines.push("ASSERT_TRUE(tcframework_execute_complete);");
   lines.push("ASSERT_FALSE(GVL_TcGenAssertionLedger__xOverflow);");
+}
+
+function validateDependencySimulations(
+  value: DependencySimulation[] | undefined,
+  selectedTests: readonly string[],
+  diagnostics: Diagnostic[]
+): DependencySimulation[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    diagnostics.push(diagnostic("error", "TCFASTTEST_SIMULATION_INVALID", "dependencySimulations must be an array."));
+    return [];
+  }
+  const tests = new Set(selectedTests.map(name => name.toLowerCase()));
+  const result: DependencySimulation[] = [];
+  const seen = new Set<string>();
+  for (const simulation of value) {
+    const frameworkTest = String(simulation?.frameworkTest ?? "").trim();
+    const kind = simulation?.kind;
+    if (!tests.has(frameworkTest.toLowerCase())) {
+      diagnostics.push(diagnostic("error", "TCFASTTEST_SIMULATION_TEST_UNKNOWN", `Dependency simulation references unknown Framework test '${frameworkTest}'.`));
+      continue;
+    }
+    if (kind === "function_block") {
+      const instancePath = String(simulation.instancePath ?? "").trim();
+      const outputs = Array.isArray(simulation.outputs) ? simulation.outputs : [];
+      if (!isMemberPath(instancePath) || outputs.length === 0 || simulation.functionName || simulation.returnValue) {
+        diagnostics.push(diagnostic("error", "TCFASTTEST_FB_SIMULATION_INVALID", `Function-block simulation for '${frameworkTest}' requires one instancePath and at least one typed output.`));
+        continue;
+      }
+      if (outputs.some(output => !isMemberPath(String(output.member ?? "")) || renderTypedValue(output) === undefined)) {
+        diagnostics.push(diagnostic("error", "TCFASTTEST_FB_SIMULATION_VALUE_INVALID", `Function-block simulation '${instancePath}' contains an invalid member, IEC type, or fixed value.`));
+        continue;
+      }
+      const key = `${frameworkTest.toLowerCase()}|fb|${instancePath.toLowerCase()}`;
+      if (seen.has(key)) {
+        diagnostics.push(diagnostic("error", "TCFASTTEST_SIMULATION_DUPLICATE", `Dependency simulation '${instancePath}' is duplicated for '${frameworkTest}'.`));
+        continue;
+      }
+      seen.add(key);
+      result.push(simulation);
+      continue;
+    }
+    if (kind === "function") {
+      const functionName = String(simulation.functionName ?? "").trim();
+      if (!isIdentifier(functionName) || renderTypedValue(simulation.returnValue) === undefined || simulation.instancePath || simulation.outputs) {
+        diagnostics.push(diagnostic("error", "TCFASTTEST_FUNCTION_SIMULATION_INVALID", `Function simulation for '${frameworkTest}' requires one functionName and one typed returnValue.`));
+        continue;
+      }
+      const key = `${frameworkTest.toLowerCase()}|function|${functionName.toLowerCase()}`;
+      if (seen.has(key)) {
+        diagnostics.push(diagnostic("error", "TCFASTTEST_SIMULATION_DUPLICATE", `Function simulation '${functionName}' is duplicated for '${frameworkTest}'.`));
+        continue;
+      }
+      seen.add(key);
+      result.push(simulation);
+      continue;
+    }
+    diagnostics.push(diagnostic("error", "TCFASTTEST_SIMULATION_KIND_INVALID", `Dependency simulation for '${frameworkTest}' has an unsupported kind.`));
+  }
+  return result;
+}
+
+function emitDependencySimulations(
+  lines: string[],
+  frameworkInstance: string,
+  simulations: readonly DependencySimulation[]
+): void {
+  for (const simulation of simulations) {
+    if (simulation.kind === "function_block") {
+      const instancePath = `${frameworkInstance}.${simulation.instancePath}`;
+      lines.push(`MOCK ${instancePath};`);
+      for (const output of simulation.outputs ?? []) {
+        lines.push(`${instancePath}.${output.member} := ${renderTypedValue(output)};`);
+      }
+    } else if (simulation.kind === "function") {
+      lines.push(`MOCK_FUNCTION ${simulation.functionName} RETURNS ${renderTypedValue(simulation.returnValue)};`);
+    }
+  }
+}
+
+function renderTypedValue(value: { type: string; value: unknown } | undefined): string | undefined {
+  if (!value || typeof value.type !== "string") return undefined;
+  const type = value.type.trim().toUpperCase();
+  if (!/^[A-Z_][A-Z0-9_.()]*$/.test(type)) return undefined;
+  if (type === "BOOL") return typeof value.value === "boolean" ? (value.value ? "TRUE" : "FALSE") : undefined;
+  if (["STRING", "WSTRING"].includes(type)) {
+    return typeof value.value === "string" ? `'${value.value.replace(/'/g, "''")}'` : undefined;
+  }
+  if (typeof value.value === "number" && Number.isFinite(value.value)) return String(value.value);
+  if (typeof value.value === "string" && /^[A-Za-z0-9_#.()+:-]+$/.test(value.value)) return value.value;
+  return undefined;
+}
+
+function isIdentifier(value: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_.]*$/.test(value);
+}
+
+function isMemberPath(value: string): boolean {
+  return isIdentifier(value) && !value.startsWith(".") && !value.endsWith(".");
 }
 
 function emitFinalFrameworkResultAssertions(lines: string[]): void {

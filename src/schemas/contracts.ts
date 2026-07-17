@@ -198,6 +198,9 @@ export const semanticReportSchema = {
   required: [
     "schemaVersion",
     "testMode",
+    "verificationProfile",
+    "integrationCoverage",
+    "dependencySimulations",
     "coveredExecutableObjects",
     "generatedTestNames",
     "subject",
@@ -215,6 +218,12 @@ export const semanticReportSchema = {
     schemaVersion: { const: 2 },
     executionPurpose: { const: "candidate_compile_preflight" },
     testMode: { enum: ["generated", "framework"] },
+    verificationProfile: { const: "isolated_semantic" },
+    integrationCoverage: { const: "not_claimed" },
+    dependencySimulations: {
+      type: "array",
+      items: { type: "object" },
+    },
     coveredExecutableObjects: {
       type: "array",
       uniqueItems: true,

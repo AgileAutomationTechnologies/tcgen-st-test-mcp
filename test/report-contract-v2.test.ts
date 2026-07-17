@@ -129,6 +129,9 @@ describe("semantic report v2 contract", () => {
       assertionLedger: _assertionLedger,
       artifactIdentities: _artifactIdentities,
       generatedTestNames: _generatedTestNames,
+      verificationProfile: _verificationProfile,
+      integrationCoverage: _integrationCoverage,
+      dependencySimulations: _dependencySimulations,
       ...legacyFields
     } = report;
     const { frameworkTestFiles: _frameworkTestFiles, ...legacyArtifacts } = legacyFields.artifacts ?? {};

@@ -11,7 +11,9 @@ import {
   diagnostic
 } from "../domain/models.js";
 import { NormalizeResult, NormalizeRuntimeOptions } from "../normalizer/TcGenToStrucppNormalizer.js";
+import { TcGenBundleParser } from "../parser/TcGenBundleParser.js";
 import { FrameworkTestBuilder, omitFrameworkInfrastructure, replaceFrameworkRunnerProgram } from "./FrameworkTestBuilder.js";
+import { projectDependencyStubReplacer } from "./DependencyIsolation.js";
 import { GeneratedTestFile, StrucppTestGenerator } from "./StrucppTestGenerator.js";
 
 export type TestRequest = NormalizeRequest & {
@@ -31,9 +33,18 @@ export interface ResolvedTestFile extends GeneratedTestFile {
 }
 
 export function normalizerOptionsForTestRequest(request: TestRequest): NormalizeRuntimeOptions {
-  return hasFrameworkTest(request)
-    ? { omitObject: omitFrameworkInfrastructure, replaceObject: replaceFrameworkRunnerProgram }
-    : {};
+  const projectStub = projectDependencyStubReplacer(
+    request,
+    new TcGenBundleParser().parseSources(request.sources ?? [], {
+      autoClose: request.options?.autoClose === true
+    }).objects
+  );
+  return {
+    ...(hasFrameworkTest(request) ? { omitObject: omitFrameworkInfrastructure } : {}),
+    replaceObject: object =>
+      (hasFrameworkTest(request) ? replaceFrameworkRunnerProgram(object) : undefined)
+      ?? projectStub(object)
+  };
 }
 
 export function resolveTestFile(request: TestRequest, normalized: NormalizeResult): ResolvedTestFile {
@@ -50,7 +61,12 @@ export function resolveTestFile(request: TestRequest, normalized: NormalizeResul
     return { ...new StrucppTestGenerator().generate(request.testSpec as TcGenTestSpec), sourceFiles: [], mode: "generated" };
   }
 
-  return new FrameworkTestBuilder().generate(normalized, request.frameworkTest, request.sources);
+  return new FrameworkTestBuilder().generate(
+    normalized,
+    request.frameworkTest,
+    request.sources,
+    request.dependencySimulations
+  );
 }
 
 function hasTestSpec(request: TestRequest): boolean {

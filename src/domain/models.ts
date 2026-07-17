@@ -124,6 +124,11 @@ export interface NormalizeRequest {
   profile?: "tcgen-strucpp-v1";
   candidateSourcePath: string;
   sources: SourceFile[];
+  projectDependencySourceSha256?: Array<{
+    path: string;
+    sourceSha256: string;
+  }>;
+  dependencySimulations?: DependencySimulation[];
   scope?: {
     mode: "all" | "entrypoints";
     entrypoints?: string[];
@@ -136,6 +141,20 @@ export interface NormalizeRequest {
     candidateCompilePreflight?: boolean;
     executionPurpose?: "candidate_compile_preflight";
   };
+}
+
+export interface TypedSimulationValue {
+  type: string;
+  value: JsonValue;
+}
+
+export interface DependencySimulation {
+  frameworkTest: string;
+  kind: "function_block" | "function";
+  instancePath?: string;
+  outputs?: Array<{ member: string } & TypedSimulationValue>;
+  functionName?: string;
+  returnValue?: TypedSimulationValue;
 }
 
 export interface SemanticTestSubject {
@@ -314,6 +333,9 @@ export interface SemanticTestReport {
   schemaVersion: 2;
   executionPurpose?: "candidate_compile_preflight";
   testMode: SemanticTestMode;
+  verificationProfile: "isolated_semantic";
+  integrationCoverage: "not_claimed";
+  dependencySimulations: DependencySimulation[];
   coveredExecutableObjects: string[];
   frameworkTargetCoverage: FrameworkTargetCoverage[];
   assertions: FrameworkAssertionEvidence[];
