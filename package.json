@@ -1,6 +1,6 @@
 {
   "name": "tcgen-st-test-mcp",
-  "version": "0.8.7",
+  "version": "0.8.8",
   "description": "Offline TcGen Structured Text semantic test MCP server backed by STruC++.",
   "type": "module",
   "repository": {

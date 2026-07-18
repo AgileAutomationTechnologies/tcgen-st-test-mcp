@@ -64,6 +64,7 @@ export function structuredCompilerOutputDiagnostics(
       sourceMap,
     );
     const generatedArtifacts = generatedCppArtifacts(completeSanitized);
+    const generatedLocation = generatedCppLocations(completeSanitized)[0];
     const hasGeneratedCppEvidence = generatedArtifacts.length > 0;
     diagnostics.push(
       diagnostic(
@@ -83,6 +84,7 @@ export function structuredCompilerOutputDiagnostics(
           // backend compatibility gap remains the authoritative owner.
           sourceKind: compatibilityGap ? "backend" : provenance.sourceKind,
           ...(provenance.original ? { original: provenance.original } : {}),
+          ...(generatedLocation ? { generated: generatedLocation } : {}),
           ...(provenance.object ? { object: provenance.object } : {}),
           ...(compatibilityGap ? { suggestion: compatibilityGap.suggestion } : {}),
           ...(compatibilityGap ? { detail: compatibilityGap.detail } : {}),
@@ -159,6 +161,39 @@ function generatedCppArtifacts(value: string): string[] {
     if (match.groups?.name) artifacts.add(match.groups.name.toLowerCase());
   }
   return [...artifacts].sort();
+}
+
+function generatedCppLocations(value: string): Array<{
+  path: string;
+  startLine: number;
+  endLine: number;
+  startColumn?: number;
+  endColumn?: number;
+}> {
+  const locations = new Map<string, {
+    path: string;
+    startLine: number;
+    endLine: number;
+    startColumn?: number;
+    endColumn?: number;
+  }>();
+  const expression = /(?:^|[\\/\s:<])(?<path>generated\.cpp|test_main\.cpp):(?<line>\d+)(?::(?<column>\d+))?/gim;
+  for (const match of value.matchAll(expression)) {
+    const path = match.groups?.path?.toLowerCase();
+    const line = Number(match.groups?.line);
+    const column = Number(match.groups?.column);
+    if (!path || !Number.isInteger(line) || line < 1) continue;
+    const key = `${path}:${line}:${Number.isInteger(column) ? column : 0}`;
+    locations.set(key, {
+      path,
+      startLine: line,
+      endLine: line,
+      ...(Number.isInteger(column) && column > 0
+        ? { startColumn: column, endColumn: column }
+        : {})
+    });
+  }
+  return [...locations.values()];
 }
 
 export function strucppTwinCatCompatibilityGap(
@@ -271,7 +306,11 @@ function compilerDiagnosticProvenance(
   // compiled production/dependency model is emitted into generated.cpp.
   // ST-front-end diagnostics retain the normalized/test source filename.
   const harness = /(?:^|[\\/\s:<])(?:test_main\.cpp|semantic_(?:framework_)?tests\.st|tcgen_framework_shim\.st)(?=[:\s>]|$)/i.test(sanitizedOutput);
-  const candidate = /(?:^|[\\/\s:<])(?:generated\.cpp|normalized\.st)(?=[:\s>]|$)/i.test(sanitizedOutput);
+  // generated.cpp is a lowered aggregate containing production, dependency,
+  // runtime, and adapter code. Its filename alone cannot establish ownership.
+  // Only a normalized.st location resolved through the trusted source map may
+  // attribute a compiler error to the production candidate.
+  const candidate = /(?:^|[\\/\s:<])normalized\.st(?=[:\s>]|$)/i.test(sanitizedOutput);
   if (harness && candidate) return { sourceKind: "mixed" };
   if (harness) return { sourceKind: "generated_test_harness" };
   if (candidate) return { sourceKind: "candidate" };

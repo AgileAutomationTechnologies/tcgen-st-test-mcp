@@ -337,7 +337,14 @@ function emitWrapperTests(
     generatedTestNames.push(captureName);
     executionTestNames.push(captureName);
     lines.push(`TEST '${escapeString(captureName)}'`);
-    emitFreshFrameworkExecution(lines, testBlock.name, maxScans, "capture", blockSimulations);
+    emitFreshFrameworkExecution(
+      lines,
+      testBlock.name,
+      maxScans,
+      "capture",
+      blockSimulations,
+      true
+    );
     lines.push("ASSERT_TRUE(GVL_TcGenAssertionLedger__diCount > 0);");
     emitFinalFrameworkResultAssertions(lines);
     lines.push("END_TEST", "");
@@ -351,7 +358,8 @@ function emitWrapperTests(
         testBlock.name,
         maxScans,
         `checkpoint_${assertion.checkpointOrdinal ?? 0}`,
-        blockSimulations
+        blockSimulations,
+        false
       );
       lines.push(
         `ASSERT_TRUE(TcGenAssertionLedgerReached('${escapeString(assertion.assertionId)}'), 'TCFRAMEWORK_ASSERTION_REACHED:${escapeString(assertion.checkpointId ?? assertion.assertionId)}');`
@@ -359,7 +367,6 @@ function emitWrapperTests(
       lines.push(
         `ASSERT_TRUE(TcGenAssertionLedgerPassed('${escapeString(assertion.assertionId)}'), 'TCFRAMEWORK_ASSERTION_PASSED:${escapeString(assertion.checkpointId ?? assertion.assertionId)}');`
       );
-      emitFinalFrameworkResultAssertions(lines);
       lines.push("END_TEST", "");
     }
   }
@@ -375,7 +382,8 @@ function emitFreshFrameworkExecution(
   testBlockName: string,
   maxScans: number,
   suffix: string,
-  dependencySimulations: readonly DependencySimulation[]
+  dependencySimulations: readonly DependencySimulation[],
+  includeExecutionHealthAssertions: boolean
 ): void {
   const instance = sanitizeIdentifier(`test_${testBlockName}_${suffix}`);
   lines.push("VAR");
@@ -403,8 +411,10 @@ function emitFreshFrameworkExecution(
   lines.push(`    ${instance}.m_xTeardown(i_xTrigger := FALSE);`);
   lines.push("END_IF");
   lines.push(`result := ${instance}.m_stGetResult();`);
-  lines.push("ASSERT_TRUE(tcframework_execute_complete);");
-  lines.push("ASSERT_FALSE(GVL_TcGenAssertionLedger__xOverflow);");
+  if (includeExecutionHealthAssertions) {
+    lines.push("ASSERT_TRUE(tcframework_execute_complete);");
+    lines.push("ASSERT_FALSE(GVL_TcGenAssertionLedger__xOverflow);");
+  }
 }
 
 function validateDependencySimulations(

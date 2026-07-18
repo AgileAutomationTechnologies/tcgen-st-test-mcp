@@ -110,7 +110,7 @@ describe("STruC++ backend", () => {
         "compile_error",
         "<temp>/generated.cpp:10: error: invalid production expression",
       ),
-    ).toBe("candidate");
+    ).toBe("unknown");
     expect(
       compilerDiagnosticSourceKind("backend_error", "compiler process failed"),
     ).toBe("backend");

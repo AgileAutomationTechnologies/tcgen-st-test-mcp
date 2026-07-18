@@ -232,6 +232,14 @@ describe("semantic report v2 contract", () => {
       generatedArtifacts: ["generated.cpp"],
       content: completeGeneratedOutput
     });
+    expect(generatedDiagnostic).toMatchObject({
+      sourceKind: "unknown",
+      generated: {
+        path: "generated.cpp",
+        startLine: 1,
+        endLine: 1
+      }
+    });
   });
 
   it("advertises v2 result capability without changing the metadata-envelope version", () => {

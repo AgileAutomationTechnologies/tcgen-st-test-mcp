@@ -94,6 +94,24 @@ describe("framework-style semantic tests", () => {
     expect(result.executionContract).toBe("tcgen-framework-multiscan-v1");
     expect(result.generatedTestFile.content).toContain("TcGenAssertionLedgerReached(");
     expect(result.generatedTestFile.content).toContain("TcGenAssertionLedgerPassed(");
+    const checkpointStart = result.generatedTestFile.content.indexOf(
+      `TEST '${result.assertions[0].checkpointTestName}'`
+    );
+    const checkpointEnd = result.generatedTestFile.content.indexOf(
+      "END_TEST",
+      checkpointStart
+    );
+    const firstCheckpointSource = result.generatedTestFile.content.slice(
+      checkpointStart,
+      checkpointEnd
+    );
+    expect(firstCheckpointSource).not.toContain("ASSERT_EQ(result.eState");
+    expect(firstCheckpointSource).not.toContain("ASSERT_EQ(result.udiFailed");
+    expect(firstCheckpointSource).not.toContain(
+      "ASSERT_TRUE(tcframework_execute_complete)"
+    );
+    expect(firstCheckpointSource).toContain("TCFRAMEWORK_ASSERTION_REACHED:");
+    expect(firstCheckpointSource).toContain("TCFRAMEWORK_ASSERTION_PASSED:");
     expect(result.generatedTestFile.content).not.toContain("ASSERT_EQ(result.sErrorMessage, '');");
     expect(result.assertions).toHaveLength(4);
     expect(result.assertions.every(assertion =>
