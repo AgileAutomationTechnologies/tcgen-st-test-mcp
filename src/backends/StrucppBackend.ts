@@ -102,7 +102,7 @@ type ResolvedBackend = {
   beckhoffSimulation?: BeckhoffSimulationIdentity;
 };
 
-export const testedStrucppVersion = "0.5.13-tcgen.6";
+export const testedStrucppVersion = "0.5.13-tcgen.7";
 export const transparentBeckhoffCapability =
   "beckhoffVirtualTransparentExecutionV1" as const;
 export const testedBeckhoffSimulationIdentity =

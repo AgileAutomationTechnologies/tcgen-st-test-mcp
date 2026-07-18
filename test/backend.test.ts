@@ -30,18 +30,18 @@ import {
 
 describe("STruC++ backend", () => {
   it("retains the complete qualified downstream SemVer identity", () => {
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.6")).toBe(
-      "0.5.13-tcgen.6",
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.7")).toBe(
+      "0.5.13-tcgen.7",
     );
-    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.6+win64.3")).toBe(
-      "0.5.13-tcgen.6+win64.3",
+    expect(detectStrucppVersion("STruC++ version 0.5.13-tcgen.7+win64.3")).toBe(
+      "0.5.13-tcgen.7+win64.3",
     );
-    expect(detectStrucppVersion("0.5.13-tcgen.6")).toBe("0.5.13-tcgen.6");
-    expect(detectStrucppVersion("evil 0.5.13-tcgen.6 suffix")).toBeUndefined();
+    expect(detectStrucppVersion("0.5.13-tcgen.7")).toBe("0.5.13-tcgen.7");
+    expect(detectStrucppVersion("evil 0.5.13-tcgen.7 suffix")).toBeUndefined();
     expect(
-      detectStrucppVersion("STruC++ version 0.5.13-tcgen.6 extra"),
+      detectStrucppVersion("STruC++ version 0.5.13-tcgen.7 extra"),
     ).toBeUndefined();
-    expect(testedStrucppVersion).toBe("0.5.13-tcgen.6");
+    expect(testedStrucppVersion).toBe("0.5.13-tcgen.7");
   });
 
   it("rejects passing backend output that omits or invents generated tests", () => {
@@ -135,6 +135,15 @@ describe("STruC++ backend", () => {
     ].join("\n");
     const invalidRsPins =
       "generated.cpp:1: error: 'class strucpp::RS' has no member named 'SET1'; RS.RESET";
+    const namedSrBistablePin =
+      "generated.cpp:1: error: 'class strucpp::SR' has no member named 'SET1'";
+    const invalidSrPins =
+      "normalized.st:1: error: Unknown parameter 'SET' for function block 'SR'. Accepted inputs: SET1, RESET";
+    const trace178InvalidRsPins = [
+      "normalized.st:132:9: error: Unknown parameter 'SET1' for function block 'RS' on ST instance 'RSPULSE' (type 'RS').",
+      "normalized.st:132:29: error: Unknown parameter 'RESET' for function block 'RS' on ST instance 'RSPULSE' (type 'RS').",
+      "Accepted inputs: SET (aliases: S), RESET1 (aliases: R1); Accepted outputs: Q1"
+    ].join("\n");
 
     expect(
       strucppTwinCatCompatibilityGap("compile_error", accessor)?.code,
@@ -150,6 +159,18 @@ describe("STruC++ backend", () => {
     });
     expect(
       strucppTwinCatCompatibilityGap("compile_error", invalidRsPins),
+    ).toBeUndefined();
+    expect(
+      strucppTwinCatCompatibilityGap("compile_error", namedSrBistablePin),
+    ).toMatchObject({
+      code: "STRUCPP_TWINCAT_BISTABLE_NAMED_PIN_CONTRACT_MISMATCH",
+      detail: "backend_incompatibility",
+    });
+    expect(
+      strucppTwinCatCompatibilityGap("compile_error", invalidSrPins),
+    ).toBeUndefined();
+    expect(
+      strucppTwinCatCompatibilityGap("compile_error", trace178InvalidRsPins),
     ).toBeUndefined();
     expect(
       strucppTwinCatCompatibilityGap(
@@ -218,6 +239,53 @@ describe("STruC++ backend", () => {
           generatedArtifacts: ["generated.cpp"],
           content: expect.stringContaining("RSRETRIGOUTPUT.SET"),
         }),
+      }),
+    );
+
+    const deterministicDiagnostics = structuredCompilerOutputDiagnostics(
+      "compile_error",
+      { stdout: "", stderr: trace178InvalidRsPins },
+      undefined,
+      [
+        {
+          generatedPath: "normalized.st",
+          generatedStartLine: 100,
+          generatedEndLine: 160,
+          original: {
+            path: "pous/function blocks/fb_tppattern.tcpou",
+            startLine: 1,
+            endLine: 61,
+          },
+          object: "FB_TPPattern",
+          sourceKind: "candidate",
+        },
+      ],
+    );
+    expect(deterministicDiagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "STRUCPP_RS_SR_FORMAL_MISMATCH",
+        sourceKind: "candidate",
+        ruleId: "tcgen_rs_sr_formal_mismatch",
+        deterministicCandidateFixes: [
+          {
+            contract: "tcgen-st-formal-rename-v1",
+            sourcePath: "pous/function blocks/fb_tppattern.tcpou",
+            line: 33,
+            instanceName: "RSPULSE",
+            functionBlockType: "RS",
+            fromParameter: "SET1",
+            toParameter: "SET",
+          },
+          {
+            contract: "tcgen-st-formal-rename-v1",
+            sourcePath: "pous/function blocks/fb_tppattern.tcpou",
+            line: 33,
+            instanceName: "RSPULSE",
+            functionBlockType: "RS",
+            fromParameter: "RESET",
+            toParameter: "RESET1",
+          },
+        ],
       }),
     );
   });
@@ -349,7 +417,7 @@ describe("STruC++ backend", () => {
         const check = await new StrucppBackend().check();
         expect(check.available).toBe(true);
         expect(["node", "native"]).toContain(check.cliMode);
-        expect(check.version).toContain("0.5.13-tcgen.6");
+        expect(check.version).toContain("0.5.13-tcgen.7");
       },
     );
   }, 120_000);
@@ -465,7 +533,7 @@ describe("STruC++ backend", () => {
           await writeFile(fakeCli, fakeSemanticRuntimeCli(true), "utf8");
           const repaired = await new StrucppBackend().check();
           expect(repaired.available).toBe(true);
-          expect(repaired.version).toBe("0.5.13-tcgen.6");
+          expect(repaired.version).toBe("0.5.13-tcgen.7");
         },
       );
     } finally {
@@ -772,7 +840,7 @@ function dirnameForTest(path: string): string {
 function fakeSemanticRuntimeCli(passes: boolean): string {
   return [
     "if (process.argv.includes('--version')) {",
-    "  console.log('STruC++ version 0.5.13-tcgen.6');",
+    "  console.log('STruC++ version 0.5.13-tcgen.7');",
     "  process.exit(0);",
     "}",
     ...fakeSimulationInfoScriptLines(),

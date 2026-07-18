@@ -1,5 +1,10 @@
 import { tmpdir } from "node:os";
-import { Diagnostic, SemanticVerdict, diagnostic } from "./models.js";
+import {
+  DeterministicCandidateFix,
+  Diagnostic,
+  SemanticVerdict,
+  diagnostic,
+} from "./models.js";
 import type { NormalizedSourceMapEntry } from "../normalizer/TcGenToStrucppNormalizer.js";
 
 const ansiEscape = /\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])/g;
@@ -54,12 +59,19 @@ export function structuredCompilerOutputDiagnostics(
     const displaySanitized = truncateDiagnosticText(completeSanitized);
     const provenance = compilerDiagnosticProvenance(verdict, completeSanitized, sourceMap);
     const compatibilityGap = strucppTwinCatCompatibilityGap(verdict, completeSanitized);
+    const deterministicCandidateFixes = rsSrFormalFixes(
+      completeSanitized,
+      sourceMap,
+    );
     const generatedArtifacts = generatedCppArtifacts(completeSanitized);
     const hasGeneratedCppEvidence = generatedArtifacts.length > 0;
     diagnostics.push(
       diagnostic(
         "error",
-        compatibilityGap?.code ?? `STRUCPP_${category}_${channel.toUpperCase()}`,
+        compatibilityGap?.code
+          ?? (deterministicCandidateFixes.length > 0
+            ? "STRUCPP_RS_SR_FORMAL_MISMATCH"
+            : `STRUCPP_${category}_${channel.toUpperCase()}`),
         hasGeneratedCppEvidence
           ? `STruC++ ${label} ${channel} contains generated C++ diagnostics. The sanitized raw compiler output is retained under technicalEvidence with explicit generated-artifact provenance.`
           : `STruC++ ${label} ${channel}:\n${displaySanitized}`,
@@ -74,6 +86,14 @@ export function structuredCompilerOutputDiagnostics(
           ...(provenance.object ? { object: provenance.object } : {}),
           ...(compatibilityGap ? { suggestion: compatibilityGap.suggestion } : {}),
           ...(compatibilityGap ? { detail: compatibilityGap.detail } : {}),
+          ...(deterministicCandidateFixes.length > 0
+            ? {
+                ruleId: "tcgen_rs_sr_formal_mismatch",
+                suggestion:
+                  "Correct the named RS/SR formals deterministically and rerun candidate preflight.",
+                deterministicCandidateFixes,
+              }
+            : {}),
           ...(hasGeneratedCppEvidence
             ? {
                 technicalEvidence: {
@@ -90,6 +110,47 @@ export function structuredCompilerOutputDiagnostics(
     );
   }
   return diagnostics;
+}
+
+function rsSrFormalFixes(
+  value: string,
+  sourceMap: readonly NormalizedSourceMapEntry[],
+): DeterministicCandidateFix[] {
+  const corrections: Record<"RS" | "SR", Record<string, string>> = {
+    RS: { SET1: "SET", RESET: "RESET1" },
+    SR: { SET: "SET1", RESET1: "RESET" },
+  };
+  const expression = /(?:^|[\\/\s:<])(?<path>normalized\.st):(?<line>\d+):(?<column>\d+):\s+error:\s+Unknown parameter ['"`](?<pin>[A-Za-z_][A-Za-z0-9_]*)['"`] for function block ['"`](?<block>RS|SR)['"`] on ST instance ['"`](?<instance>[A-Za-z_][A-Za-z0-9_]*)['"`]/gim;
+  const fixes = new Map<string, DeterministicCandidateFix>();
+  for (const match of value.matchAll(expression)) {
+    const generatedLine = Number(match.groups?.line);
+    const block = match.groups?.block?.toUpperCase() as "RS" | "SR" | undefined;
+    const fromParameter = match.groups?.pin?.toUpperCase() ?? "";
+    const toParameter = block ? corrections[block][fromParameter] : undefined;
+    const entry = sourceMap.find(item =>
+      item.sourceKind === "candidate"
+      && item.generatedPath.toLowerCase() === "normalized.st"
+      && generatedLine >= item.generatedStartLine
+      && generatedLine <= item.generatedEndLine
+    );
+    if (!entry || !block || !toParameter || !match.groups?.instance) continue;
+    const line = entry.original.startLine + generatedLine - entry.generatedStartLine;
+    if (line < entry.original.startLine || line > entry.original.endLine) continue;
+    const fix: DeterministicCandidateFix = {
+      contract: "tcgen-st-formal-rename-v1",
+      sourcePath: entry.original.path,
+      line,
+      instanceName: match.groups.instance,
+      functionBlockType: block,
+      fromParameter,
+      toParameter,
+    };
+    fixes.set(
+      [fix.sourcePath, fix.line, fix.instanceName, fix.fromParameter].join("|").toLowerCase(),
+      fix,
+    );
+  }
+  return [...fixes.values()];
 }
 
 function generatedCppArtifacts(value: string): string[] {
@@ -139,15 +200,30 @@ export function strucppTwinCatCompatibilityGap(
 }
 
 function bistableNamedPinContractMismatch(value: string): boolean {
-  const mentionsAdmittedBlockPin =
-    (/\bRS\b/i.test(value) && /\b(?:SET|RESET1)\b/i.test(value))
-    || (/\bSR\b/i.test(value) && /\b(?:SET1|RESET)\b/i.test(value));
-  const rejectsNamedMember =
-    /\b(?:no|unknown|invalid|unexpected|missing)\b[^\r\n]{0,120}\b(?:member|field|input|pin|parameter|argument)\b/i.test(value)
-    || /\b(?:member|field|input|pin|parameter|argument)\b[^\r\n]{0,120}\b(?:not found|not declared|unknown|invalid|does not exist)\b/i.test(value)
-    || /\bhas no member(?: named)?\b/i.test(value)
-    || /\bnot a member of\b/i.test(value);
-  return mentionsAdmittedBlockPin && rejectsNamedMember;
+  for (const rejected of rejectedBistablePins(value)) {
+    const admitted = rejected.block === "RS"
+      ? new Set(["SET", "RESET1"])
+      : new Set(["SET1", "RESET"]);
+    if (admitted.has(rejected.pin)) return true;
+  }
+  return false;
+}
+
+function rejectedBistablePins(value: string): Array<{ block: "RS" | "SR"; pin: string }> {
+  const rejected: Array<{ block: "RS" | "SR"; pin: string }> = [];
+  const parameterThenBlock = /\b(?:unknown|invalid|unexpected|missing)\s+(?:member|field|input|pin|parameter|argument)\s+['"`]?([A-Za-z_][A-Za-z0-9_]*)['"`]?[^\r\n]{0,160}\bfunction\s+block\s+['"`]?(RS|SR)['"`]?/gi;
+  const blockThenParameter = /\bfunction\s+block\s+['"`]?(RS|SR)['"`]?[^\r\n]{0,160}\b(?:unknown|invalid|unexpected|missing)\s+(?:member|field|input|pin|parameter|argument)\s+['"`]?([A-Za-z_][A-Za-z0-9_]*)['"`]?/gi;
+  const generatedMember = /\bclass\s+(?:strucpp::)?(RS|SR)['"`]?\s+has\s+no\s+member\s+named\s+['"`]([A-Za-z_][A-Za-z0-9_]*)['"`]/gi;
+  for (const match of value.matchAll(parameterThenBlock)) {
+    rejected.push({ block: match[2].toUpperCase() as "RS" | "SR", pin: match[1].toUpperCase() });
+  }
+  for (const match of value.matchAll(blockThenParameter)) {
+    rejected.push({ block: match[1].toUpperCase() as "RS" | "SR", pin: match[2].toUpperCase() });
+  }
+  for (const match of value.matchAll(generatedMember)) {
+    rejected.push({ block: match[1].toUpperCase() as "RS" | "SR", pin: match[2].toUpperCase() });
+  }
+  return rejected;
 }
 
 export function compilerDiagnosticSourceKind(

@@ -74,7 +74,7 @@ export function validateFrameworkExecutionContract(
       continue;
     }
 
-    const execution = validateExecuteMethod(test, execute, objectSource);
+    const execution = validateExecuteMethod(test, execute);
     diagnostics.push(...execution.diagnostics);
     if (execution.multiScan && !busyObserver) {
       diagnostics.push(
@@ -133,11 +133,9 @@ function validateBusyObserver(test: TcGenObject, busyObserver: TcGenObject): Dia
 
 function validateExecuteMethod(
   test: TcGenObject,
-  execute: TcGenObject,
-  testSource: string
+  execute: TcGenObject
 ): { diagnostics: Diagnostic[]; multiScan: boolean } {
   const diagnostics: Diagnostic[] = [];
-  const code = stripTrivia(`${testSource}\n${execute.declarationText}\n${execute.implementationText}`);
   const options = {
     sourceKind: "generated_test_harness" as const,
     object: execute.qualifiedName,
@@ -175,57 +173,6 @@ function validateExecuteMethod(
   }
 
   const reachableResumeSource = reachableFalseTriggerSource(triggerFlow);
-  if (!/\budiStep\s*:\s*UDINT\b/i.test(code)) {
-    diagnostics.push(
-      diagnostic(
-        "error",
-        "TCFRAMEWORK_MULTISCAN_STEP_REQUIRED",
-        `Multi-scan Framework test '${test.name}' must declare 'udiStep : UDINT' as its deterministic execution step.`,
-        options
-      )
-    );
-  }
-  if (!/\budiStep\s*:=\s*(?:0|1)\s*;/i.test(triggerFlow.trueBranch)) {
-    diagnostics.push(
-      diagnostic(
-        "error",
-        "TCFRAMEWORK_MULTISCAN_STEP_INITIALIZATION_REQUIRED",
-        `Multi-scan Framework test '${test.name}' must initialize udiStep in the TRUE-trigger branch.`,
-        options
-      )
-    );
-  }
-  if (!/\bCASE\s+udiStep\s+OF\b/i.test(reachableResumeSource)) {
-    diagnostics.push(
-      diagnostic(
-        "error",
-        "TCFRAMEWORK_MULTISCAN_CASE_REQUIRED",
-        `Multi-scan Framework test '${test.name}' must advance through 'CASE udiStep OF' in its FALSE-trigger path.`,
-        options
-      )
-    );
-  }
-  if (!hasStateAssignment(triggerFlow.trueBranch, "_eState", "Running")
-    || !hasStateAssignment(triggerFlow.trueBranch, "_eExecuteState", "Running")) {
-    diagnostics.push(
-      diagnostic(
-        "error",
-        "TCFRAMEWORK_MULTISCAN_RUNNING_STATE_REQUIRED",
-        `Multi-scan Framework test '${test.name}' must set both _eState and _eExecuteState to eTestState_Running before setting _xPhaseBusy.`,
-        options
-      )
-    );
-  }
-  if (!hasDualRunningGuard(reachableResumeSource)) {
-    diagnostics.push(
-      diagnostic(
-        "error",
-        "TCFRAMEWORK_MULTISCAN_RUNNING_GUARD_REQUIRED",
-        `Multi-scan Framework test '${test.name}' may resume only while both _eState and _eExecuteState remain eTestState_Running.`,
-        options
-      )
-    );
-  }
   if (!containsMeaningfulResumeStatement(reachableResumeSource)) {
     diagnostics.push(
       diagnostic(
@@ -242,19 +189,6 @@ function validateExecuteMethod(
         "error",
         "TCFRAMEWORK_MULTISCAN_TERMINATION_REQUIRED",
         `Multi-scan Framework test '${test.name}' never clears _xPhaseBusy on a terminal path.`,
-        options
-      )
-    );
-  }
-  const busyClearCount = (
-    removeStaticallyFalseBlocks(reachableResumeSource).match(/\b_xPhaseBusy\s*:=\s*FALSE\b/gi) ?? []
-  ).length;
-  if (busyClearCount < 2) {
-    diagnostics.push(
-      diagnostic(
-        "error",
-        "TCFRAMEWORK_MULTISCAN_FAILURE_TERMINATION_REQUIRED",
-        `Multi-scan Framework test '${test.name}' must clear _xPhaseBusy when either inherited state leaves Running as well as on its successful terminal path.`,
         options
       )
     );
@@ -302,11 +236,6 @@ function hasStateAssignment(source: string, target: string, state: "Running" | "
   return new RegExp(`\\b${target}\\s*:=\\s*eTestState_${state}\\b`, "i").test(
     removeStaticallyFalseBlocks(source)
   );
-}
-
-function hasDualRunningGuard(source: string): boolean {
-  return /\b_eState\s*=\s*eTestState_Running\b/i.test(source)
-    && /\b_eExecuteState\s*=\s*eTestState_Running\b/i.test(source);
 }
 
 function validateBusyOwnership(

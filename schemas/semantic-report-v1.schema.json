@@ -104,7 +104,33 @@
         "generated": { "$ref": "#/$defs/sourceSpan" },
         "object": { "type": "string" },
         "ruleId": { "type": "string" },
-        "suggestion": { "type": "string" }
+        "suggestion": { "type": "string" },
+        "deterministicCandidateFixes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/deterministicCandidateFix" }
+        }
+      }
+    },
+    "deterministicCandidateFix": {
+      "type": "object",
+      "required": [
+        "contract",
+        "sourcePath",
+        "line",
+        "instanceName",
+        "functionBlockType",
+        "fromParameter",
+        "toParameter"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "contract": { "const": "tcgen-st-formal-rename-v1" },
+        "sourcePath": { "type": "string", "minLength": 1 },
+        "line": { "type": "integer", "minimum": 1 },
+        "instanceName": { "type": "string", "minLength": 1 },
+        "functionBlockType": { "enum": ["RS", "SR"] },
+        "fromParameter": { "type": "string", "minLength": 1 },
+        "toParameter": { "type": "string", "minLength": 1 }
       }
     },
     "rewriteRecord": {

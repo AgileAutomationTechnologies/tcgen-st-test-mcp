@@ -57,6 +57,7 @@ export interface Diagnostic {
   ruleId?: string;
   suggestion?: string;
   detail?: "backend_incompatibility";
+  deterministicCandidateFixes?: DeterministicCandidateFix[];
   technicalEvidence?: {
     kind: "compiler_output";
     channel: "stdout" | "stderr";
@@ -64,6 +65,16 @@ export interface Diagnostic {
     sourceKind: "generated_cpp";
     generatedArtifacts: string[];
   };
+}
+
+export interface DeterministicCandidateFix {
+  contract: "tcgen-st-formal-rename-v1";
+  sourcePath: string;
+  line: number;
+  instanceName: string;
+  functionBlockType: "RS" | "SR";
+  fromParameter: string;
+  toParameter: string;
 }
 
 export interface SourceFile {

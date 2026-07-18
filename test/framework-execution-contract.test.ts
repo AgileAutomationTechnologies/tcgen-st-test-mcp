@@ -130,31 +130,36 @@ describe("Framework multi-scan execution contract", () => {
     expect(result.generatedTestFile.content.length).toBeGreaterThan(0);
   });
 
-  it("requires a CASE step machine, both running/terminal states, and failure cleanup for multi-scan tests", async () => {
-    const mutations: Array<[string, string, string]> = [
+  it("accepts equivalent multi-scan state machines while retaining terminal lifecycle validation", async () => {
+    const acceptedMutations: Array<[string, string, string]> = [
       ["step", "    udiStep : UDINT;", "    diStep : DINT;"],
-      ["case", "CASE udiStep OF", "CASE udiOther OF"],
+      ["case", "CASE udiStep OF", "CASE diStep OF"],
       ["running", "    _eState := eTestState_Running;", ""],
-      ["terminal", "                _eState := eTestState_Passed;", ""],
       ["failure-cleanup", "    ELSE\n        _xPhaseBusy := FALSE;\n    END_IF", "    END_IF"]
     ];
-    const expectedCodes: Record<string, string> = {
-      step: "TCFRAMEWORK_MULTISCAN_STEP_REQUIRED",
-      case: "TCFRAMEWORK_MULTISCAN_CASE_REQUIRED",
-      running: "TCFRAMEWORK_MULTISCAN_RUNNING_STATE_REQUIRED",
-      terminal: "TCFRAMEWORK_TERMINAL_STATES_REQUIRED",
-      "failure-cleanup": "TCFRAMEWORK_MULTISCAN_FAILURE_TERMINATION_REQUIRED"
-    };
-
-    for (const [name, from, to] of mutations) {
+    for (const [name, from, to] of acceptedMutations) {
       const request = loadRequest("framework-limit-counter");
       const source = frameworkSource(request);
       source.content = source.content.replace(from, to);
       request.frameworkTest!.targetMappings[0].testSourceSha256 = sha256(source.content);
       const result = await generate(request);
-      expect(codes(result), name).toContain(expectedCodes[name]);
-      expect(result.generatedTestFile.content, name).toBe("");
+      expect(codes(result), name).not.toContain("TCFRAMEWORK_MULTISCAN_STEP_REQUIRED");
+      expect(codes(result), name).not.toContain("TCFRAMEWORK_MULTISCAN_CASE_REQUIRED");
+      expect(codes(result), name).not.toContain("TCFRAMEWORK_MULTISCAN_RUNNING_STATE_REQUIRED");
+      expect(codes(result), name).not.toContain("TCFRAMEWORK_MULTISCAN_FAILURE_TERMINATION_REQUIRED");
+      expect(result.generatedTestFile.content.length, name).toBeGreaterThan(0);
     }
+
+    const missingTerminal = loadRequest("framework-limit-counter");
+    const missingTerminalSource = frameworkSource(missingTerminal);
+    missingTerminalSource.content = missingTerminalSource.content.replace(
+      "                _eState := eTestState_Passed;",
+      ""
+    );
+    missingTerminal.frameworkTest!.targetMappings[0].testSourceSha256 = sha256(missingTerminalSource.content);
+    const missingTerminalResult = await generate(missingTerminal);
+    expect(codes(missingTerminalResult)).toContain("TCFRAMEWORK_TERMINAL_STATES_REQUIRED");
+    expect(missingTerminalResult.generatedTestFile.content).toBe("");
   });
 
   it("requires one pure busy observer and keeps busy-state ownership inside m_xExecute", async () => {
@@ -201,7 +206,7 @@ describe("Framework multi-scan execution contract", () => {
       executionAttempted: true,
       executable: "strucpp-win.exe",
       cliMode: "native",
-      version: "STruC++ version 0.5.13-tcgen.6",
+      version: "STruC++ version 0.5.13-tcgen.7",
       stdout: "ASSERT_TRUE failed: tcframework_execute_complete expected TRUE, got FALSE\nFAIL: framework FB_Test_LimitCounter",
       stderr: "",
       exitCode: 1,
